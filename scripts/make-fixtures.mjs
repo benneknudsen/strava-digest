@@ -32,7 +32,7 @@ function simulatedRun({ startPace, endPace, startHr, endHr, km = 10, startOffset
 }
 
 function gpx({ pts, start }) {
-  const head = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="fixture"><trk><name>Syntetisk tur</name><trkseg>\n`;
+  const head = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="fixture"><trk><name>Syntetisk tur</name><type>running</type><trkseg>\n`;
   const body = pts
     .map((p) => {
       const time = new Date(start.getTime() + p.t * 1000).toISOString();
@@ -99,6 +99,10 @@ dir('activities');
 writeFileSync(join(root, 'activities/Run-1001.gpx'), gpx(long));
 writeFileSync(join(root, 'activities/Run-1002.tcx'), tcx(tempo));
 writeFileSync(join(root, 'activities/Run-1003.gpx'), gpx(easy));
+writeFileSync(
+  join(root, 'activities/UdenTid.gpx'),
+  `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>Uden tid</name><type>running</type><trkseg><trkpt lat="55.6761" lon="12.5683"><ele>20</ele></trkpt></trkseg></trk></gpx>\n`,
+);
 dir('media');
 writeFileSync(join(root, 'media/photo.jpg'), 'not-a-real-jpeg');
 

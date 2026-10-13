@@ -31,6 +31,44 @@ fulde sti på markørens plads, så du kan slippe filen midt i kommandoen:
 node src/cli.ts [slip filen her] --last 5
 ```
 
+**Løse aktivitetsfiler.** Ud over zip/mappe med `activities.csv` kan værktøjet
+læse en enkelt aktivitetsfil — `.fit`, `.gpx` eller `.tcx` (også `.gz`) — eller
+en mappe med sådanne filer:
+
+```bash
+node src/cli.ts ~/Downloads/strava-filer/Run-1001.gpx
+node src/cli.ts ~/Downloads/strava-filer --last 5
+```
+
+Dato, sport, puls, distance og zoner kommer fra filen selv. Felter der kun
+findes i bulk-eksportens `activities.csv` — navnet fra eksporten, Relative
+Effort, udstyr og kalorier — findes ikke i denne tilstand og udelades ærligt:
+digestens header siger at metadata er læst fra filerne, og en note siger hvad
+der mangler. Filer uden tidsstempel springes over med en synlig note i stedet
+for at crashe. Det passer til Stravas per-aktivitet-eksport (`Export GPX` /
+`Export Original`), som virker hele tiden, hvor bulk-eksporten har 7 dages
+karantæne mellem anmodninger.
+
+**Interaktiv start.** Kører du `strava-digest` uden argumenter i et rigtigt
+terminalvindue, scanner den arbejdsmappen, `~/Downloads` og `~/Desktop` (ét
+niveau ned) for kandidater — mapper med `activities.csv`, zip-filer, mapper
+med aktivitetsfiler og enkelte aktivitetsfiler — viser dem nummereret med
+nyeste først (maks 15) og beder om et nummer. Du kan også indsætte eller
+trække en sti direkte ind, og `q` afslutter uden at gøre noget. Efter valget
+køres digesten med standardindstillinger og skrives til stdout — ét spørgsmål,
+ikke en spørgsmålsrække. `--help` og ikke-interaktive kørsler opfører sig som
+før.
+
+**Global kommando.** `npm link` giver en global `strava-digest`-kommando:
+
+```bash
+npm link
+strava-digest                              # interaktiv vælger
+strava-digest ~/Downloads/export_123.zip --last 5
+```
+
+Pakken forbliver `private` — der publiseres intet til npm.
+
 **Platforme.** Node ≥ 22.18 (typen strippes direkte, intet build-step).
 Værktøjet er ren JavaScript/TypeScript uden native moduler — `yauzl` og
 `fit-file-parser` er ren JS, og gunzip kommer fra `node:zlib`. Derfor er det
@@ -146,7 +184,9 @@ npm run typecheck
 
 Testen bruger udelukkende syntetiske data (ingen persondata) og tjekker bl.a.
 distance, antal splits, HR-drift-interval, negativ split, puls-niveau og at
-digesten er under 4 KB og mindst 50× mindre end rådata.
+digesten er under 4 KB og mindst 50× mindre end rådata. Den dækker også løse
+aktivitetsfiler (dato, type og puls læst fra filen, note ved filer uden
+tidsstempel) og den rene `discoverSources`-funktion bag den interaktive start.
 
 ## Compliance
 
