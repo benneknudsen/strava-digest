@@ -1,6 +1,7 @@
 import type { RunAnalysis } from './analysis.ts';
 import type { ActivityRow } from './strava.ts';
 import { windowStats } from './strava.ts';
+import { ZONE_NAMES, zonePcts } from './zones.ts';
 
 export interface DigestedRun {
   row: ActivityRow;
@@ -22,6 +23,15 @@ export interface DigestInput {
 
 const num = (v: number | null | undefined, digits = 0, fallback = '–'): string =>
   v == null || !Number.isFinite(v) ? fallback : v.toFixed(digits).replace('.', ',');
+
+/** Dansk procent: komma som decimalseparator, ingen decimaler når tallet er helt. */
+const fmtPct = (v: number): string => {
+  const s = v.toFixed(1).replace('.', ',');
+  return s.endsWith(',0') ? s.slice(0, -2) : s;
+};
+
+const zoneLine = (pcts: number[]): string =>
+  ZONE_NAMES.map((name, i) => `${name} ${fmtPct(pcts[i] ?? 0)} %`).join(' · ');
 
 export function fmtPace(secPerKm: number | null | undefined): string {
   if (secPerKm == null || !Number.isFinite(secPerKm) || secPerKm <= 0) return '–';
@@ -72,6 +82,12 @@ export function renderMarkdown(input: DigestInput): string {
       `- ${num(stats.distanceKm, 1)} km fordelt på ${stats.count} løb (~${num(stats.runsPerWeek, 1)}/uge) · længste ${num(stats.longestKm, 1)} km`,
     );
     out.push(`- gennemsnit: ${fmtPace(stats.avgPaceSecPerKm)} · puls ${num(stats.avgHr, 0)}`);
+    const zoneSums = windowZoneSeconds(runs, base, baselineDays);
+    if (zoneSums) {
+      const pcts = zonePcts(zoneSums);
+      const roligt = (pcts[0] ?? 0) + (pcts[1] ?? 0);
+      out.push(`- zoner: ${zoneLine(pcts)} · roligt (Z1–Z2) ${fmtPct(roligt)} %`);
+    }
   }
   out.push('');
 
@@ -146,6 +162,16 @@ function renderRun(run: DigestedRun, index: number): string[] {
     }
     if (analysis.paceCvPct != null) signals.push(`pace-jævnhed CV ${num(analysis.paceCvPct, 1)} %`);
     if (signals.length) lines.push(`- **Signaler:** ${signals.join(' · ')}`);
+    if (analysis.zonePct && analysis.zoneMaxHr != null) {
+      const source = analysis.zoneSource === 'fit' ? 'fra uret' : 'fra --max-hr';
+      lines.push(
+        `- **Zoner:** ${zoneLine(analysis.zonePct)} (max-puls ${num(analysis.zoneMaxHr)}, ${source})`,
+      );
+    } else if (analysis.zoneConfigured) {
+      lines.push('- _note: ingen zonefordeling (turen har ingen pulsdata)_');
+    } else {
+      lines.push('- _note: ingen zonefordeling (ingen max-puls — sæt --max-hr)_');
+    }
     if (analysis.distanceDerived) lines.push('- _note: distance udledt af GPS (ingen distance-felt i filen)_');
   } else if (run.error) {
     lines.push(`- _intra-tur-detaljer utilgængelige: ${run.error}_`);
@@ -157,6 +183,26 @@ function paceFrom(row: ActivityRow): number | null {
   const d = row.distanceM;
   const t = row.movingSec ?? row.elapsedSec;
   return d && t ? t / (d / 1000) : null;
+}
+
+/**
+ * Summér zone-sekunder over løb i baseline-vinduet — samme udvalg som
+ * `windowStats`, men kun løb hvor zonerne faktisk kunne beregnes.
+ */
+function windowZoneSeconds(runs: DigestedRun[], before: Date, days: number): number[] | null {
+  const from = new Date(before.getTime() - days * 86_400_000);
+  const buckets = [0, 0, 0, 0, 0];
+  let any = false;
+  for (const run of runs) {
+    if (!(run.row.date > from && run.row.date <= before)) continue;
+    const zones = run.analysis?.zones;
+    if (!zones) continue;
+    any = true;
+    zones.forEach((s, i) => {
+      buckets[i] = (buckets[i] ?? 0) + s;
+    });
+  }
+  return any ? buckets : null;
 }
 
 function iso(d: Date): string {

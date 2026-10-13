@@ -27,6 +27,12 @@ export interface Track {
   source: 'fit' | 'gpx' | 'tcx';
   /** true when per-point distance had to be derived from GPS positions */
   distanceDerived: boolean;
+  /** zonedata fra filen — kun sat når filen faktisk indeholder den */
+  zones?: {
+    maxHr?: number;
+    /** fire stigende skæringspunkter (øvre puls for Z1–Z4) fra uret */
+    boundaries?: number[];
+  };
 }
 
 export function parseActivityBuffer(filename: string, raw: Buffer): Track {
@@ -92,7 +98,35 @@ function trackFromFit(data: any): Track {
     sport: typeof session.sport === 'string' ? session.sport : 'unknown',
     source: 'fit',
     distanceDerived: false,
+    zones: fitZones(data),
   };
+}
+
+/**
+ * Læs urets egen zonekonfiguration, når FIT-filen har den: `zones_target`
+ * bærer max-pulsen, `hr_zone` de fire stigende grænser. Parserens output er
+ * arrays pr. beskedtype (zones_target dog en enkelt besked), så guard mod
+ * tomt/undefined. Ingen påhit: findes intet, returneres undefined.
+ */
+function fitZones(data: any): Track['zones'] {
+  const maxHr = toArray(data?.zones_target)
+    .map((t) => finite(t?.max_heart_rate))
+    .find((v): v is number => v != null && v > 0);
+  const highs = toArray(data?.hr_zone)
+    .map((z) => finite(z?.high_bpm))
+    .filter((v): v is number => v != null && v > 0);
+  const boundaries =
+    highs.length === 4 && highs.every((v, i) => i === 0 || v > highs[i - 1]!) ? highs : undefined;
+  if (maxHr == null && boundaries == null) return undefined;
+  const zones: NonNullable<Track['zones']> = {};
+  if (maxHr != null) zones.maxHr = maxHr;
+  if (boundaries) zones.boundaries = boundaries;
+  return zones;
+}
+
+function toArray(v: unknown): any[] {
+  if (Array.isArray(v)) return v;
+  return v == null ? [] : [v];
 }
 
 /* -------------------------------------------------------------------- GPX */

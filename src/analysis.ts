@@ -1,4 +1,5 @@
 import type { Track, TrackPoint } from './activity.ts';
+import { zonePcts, zoneSeconds, type ZoneConfig } from './zones.ts';
 
 export interface Split {
   km: number;
@@ -15,6 +16,13 @@ export interface RunAnalysis {
   avgPaceSecPerKm: number | null;
   avgHr: number | null;
   maxHr: number | null;
+  /** sekunder i Z1–Z5, vægtet med effektiv tid; null når zoner ikke kan beregnes */
+  zones: number[] | null;
+  zonePct: number[] | null;
+  zoneMaxHr: number | null;
+  zoneSource: 'flag' | 'fit' | null;
+  /** true når en zonekonfiguration fandtes — zoner kan stadig mangle uden pulsdata */
+  zoneConfigured: boolean;
   avgCadence: number | null;
   splits: Split[];
   /** pace-normalised aerobic decoupling, % — positive = HR drifted up while pace held */
@@ -31,7 +39,7 @@ export interface RunAnalysis {
 const PAUSE_MIN_SEC = 20;
 const PAUSE_MAX_M = 8;
 
-export function analyseRun(track: Track): RunAnalysis {
+export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): RunAnalysis {
   const pts = track.points;
   const stops = findPauses(pts);
 
@@ -45,6 +53,20 @@ export function analyseRun(track: Track): RunAnalysis {
   const cads = pts.map((p) => p.cad).filter((c): c is number => c != null && c > 0);
   const splits = buildSplits(pts);
 
+  let zones: number[] | null = null;
+  let zonePct: number[] | null = null;
+  let zoneMaxHr: number | null = null;
+  let zoneSource: 'flag' | 'fit' | null = null;
+  if (zoneCfg) {
+    const buckets = zoneSeconds(pts, zoneCfg);
+    if (buckets.some((s) => s > 0)) {
+      zones = buckets;
+      zonePct = zonePcts(buckets);
+      zoneMaxHr = zoneCfg.maxHr;
+      zoneSource = zoneCfg.source;
+    }
+  }
+
   return {
     movingSec,
     distanceM,
@@ -52,6 +74,11 @@ export function analyseRun(track: Track): RunAnalysis {
     avgPaceSecPerKm: distanceM > 200 ? movingSec / (distanceM / 1000) : null,
     avgHr: hoursWeightedMean(pts, (p) => p.hr),
     maxHr: hrs.length ? Math.max(...hrs) : null,
+    zones,
+    zonePct,
+    zoneMaxHr,
+    zoneSource,
+    zoneConfigured: zoneCfg != null,
     avgCadence: cads.length ? cads.reduce((a, b) => a + b, 0) / cads.length : null,
     splits,
     hrDriftPct: hrDrift(pts),

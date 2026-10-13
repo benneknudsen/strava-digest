@@ -61,18 +61,53 @@ aktivitetsfilen (`.fit.gz`, `.gpx`, `.tcx`):
 - **Negativ/positiv split**: pace-forskel mellem de to halvdele.
 - **Pauser**: stop >20 s uden fremdrift, antal og samlet tid.
 - **Pace-jævnhed**: variationskoefficient på km-splits.
+- **Zoner**: tid i Z1–Z5 pr. løb (effektiv tid, pauser ekskluderet) og en
+  roligt/hårdt-andel over baseline-vinduet — se afsnittet nedenfor.
 - **Baseline**: rullende vindue (default 28 dage) før seneste tur — volumen,
   ture/uge, gennemsnitspace og -puls.
+
+## Zoner
+
+Zonelinjen pr. løb viser hvor tiden faktisk blev brugt: procent i Z1–Z5,
+vægtet med effektiv tid efter samme pause-regel som splits. Baseline-blokken
+summerer sekunderne over løbene i vinduet og viser hvor stor en andel der var
+roligt arbejde, Z1–Z2.
+
+Er der ikke en zonekonfiguration i filen, bruges standardmodellen i procent af
+max-puls:
+
+| Zone | Puls |
+|------|------|
+| Z1 | 50–60 % af max |
+| Z2 | 60–70 % af max |
+| Z3 | 70–80 % af max |
+| Z4 | 80–90 % af max |
+| Z5 | 90–100 % af max |
+
+Grænserne hentes i denne rækkefølge — der gættes aldrig:
+
+1. `--max-hr N` (eksplicit flag vinder)
+2. Urets egne zoner, hvis FIT-filen har `zones_target`/`hr_zone`-beskeder
+3. Ellers ingen zonefordeling, kun en note på turen om hvorfor
+
+Har FIT-filen zonegrænser men ingen max-puls, udledes max-pulsen af den øverste
+grænse med standardmodellen — Z4 slutter ved 90 % af max, så max-pulsen er
+filens øverste grænse / 0,9. Det er en udledning af filens egne grænser, ikke
+et gæt.
+
+Digesten skriver hvilken max-puls og kilde zonerne kommer fra (`fra uret`
+eller `fra --max-hr`), så output er deterministisk sammenligneligt.
 
 ## Flag
 
 ```
 --last N        antal aktiviteter i digesten (default 5)
 --all           alle aktivitetstyper, ikke kun løb
---list          vis indekset (dato, type, filnavn) og umappede kolonner
+--list          vis indekset (dato, type, filnavn, zoner: ja/nej) og umappede kolonner
 --out FIL       skriv til fil i stedet for stdout
 --json          JSON (inkl. markdown-feltet) i stedet for Markdown
 --days N        baseline-vindue i dage (default 28)
+--max-hr N      max-puls til zonefordeling (Z1–Z5 = 50–100 % af max)
 --context FIL   kontekstfil der flettes ind (default ./context.md)
 ```
 
