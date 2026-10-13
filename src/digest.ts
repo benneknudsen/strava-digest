@@ -121,9 +121,16 @@ export function renderMarkdown(input: DigestInput): string {
 function renderRun(run: DigestedRun, index: number): string[] {
   const { row, analysis } = run;
   const lines: string[] = [];
+  // Analysens distance vinder, men en 0'er uden distance i rækken betyder
+  // "filen bærer ingen distance" — ikke en rigtig tur på nul kilometer.
+  const trackDistanceM = analysis?.distanceM;
+  const distanceM =
+    trackDistanceM != null && (trackDistanceM > 0 || row.distanceM != null)
+      ? trackDistanceM
+      : row.distanceM;
   lines.push(`### ${index}) ${iso(row.date)} · ${row.name}`);
   lines.push(
-    `- **Pas:** ${fmtKm(analysis?.distanceM ?? row.distanceM)} · ${fmtDuration(analysis?.movingSec ?? row.movingSec)} · **${fmtPace(analysis?.avgPaceSecPerKm ?? paceFrom(row))}** · puls ${num(analysis?.avgHr ?? row.avgHr, 0)}/${num(analysis?.maxHr ?? row.maxHr, 0)}${analysis?.avgCadence != null ? ` · kadence ${num(analysis.avgCadence)}` : ''}`,
+    `- **Pas:** ${fmtKm(distanceM)} · ${fmtDuration(analysis?.movingSec ?? row.movingSec)} · **${fmtPace(analysis?.avgPaceSecPerKm ?? paceFrom(row))}** · puls ${num(analysis?.avgHr ?? row.avgHr, 0)}/${num(analysis?.maxHr ?? row.maxHr, 0)}${analysis?.avgCadence != null ? ` · kadence ${num(analysis.avgCadence)}` : ''}`,
   );
   if (analysis) {
     const extras: string[] = [];

@@ -154,7 +154,9 @@ function parseGpx(xml: string): Track {
   }
   fillDistances(points);
   deriveSpeeds(points);
-  return { points, laps: [], sport: 'unknown', source: 'gpx', distanceDerived: true };
+  const trk = xml.match(/<trk(?:\s[^>]*)?>([\s\S]*?)<\/trk>/i)?.[1] ?? '';
+  const sport = trk.match(/<type>([^<]+)<\/type>/i)?.[1]?.trim().toLowerCase() || 'unknown';
+  return { points, laps: [], sport, source: 'gpx', distanceDerived: true };
 }
 
 /* -------------------------------------------------------------------- TCX */

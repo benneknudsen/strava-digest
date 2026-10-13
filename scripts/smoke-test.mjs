@@ -1,7 +1,7 @@
 // Smoke-test: genererer syntetiske fixtures (ingen persondata), kører hele
 // pipelinen og fejler hvis nøgletallene ikke stemmer. Kør med `npm test`.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,12 +10,15 @@ import { parseActivityBuffer } from '../src/activity.ts';
 import { mapColumns } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
 import { renderMarkdown } from '../src/digest.ts';
+import { discoverSources } from '../src/interactive.ts';
+import { isActivityFile, rowFromTrack } from '../src/loose.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
 import { toActivities } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'strava-digest-test-'));
 let failures = 0;
+let enkeltRoot = null;
 
 function check(label, actual, predicate) {
   const ok = predicate(actual);
@@ -184,6 +187,137 @@ try {
   check('ugyldig --max-hr fejler', hrErr !== null, (v) => v === true);
   check('ugyldig --max-hr giver dansk besked', String(hrErr?.stderr ?? ''), (v) => v.includes('positivt heltal'));
 
+  /* ---- løse aktivitetsfiler (Del A) ---- */
+
+  const looseDir = join(tmp, 'activities');
+  const looseSingle = JSON.parse(
+    execFileSync('node', ['src/cli.ts', join(looseDir, 'Run-1001.gpx'), '--json'], { encoding: 'utf8' }),
+  );
+  check('loose fil: dato kommer fra filen', looseSingle.runs[0]?.row?.date?.slice(0, 10) ?? null, (v) => v === '2026-10-12');
+  check('loose fil: type kommer fra GPX <type>', looseSingle.runs[0]?.row?.type ?? null, (v) => v === 'running');
+  check('loose fil: puls kommer fra analysen', looseSingle.runs[0]?.analysis?.avgHr ?? null, (v) => v != null && v > 140 && v < 170);
+  check('loose fil: navn = filnavn uden endelse', looseSingle.runs[0]?.row?.name ?? null, (v) => v === 'Run-1001');
+  check('loose fil: elapsed fra første til sidste punkt', looseSingle.runs[0]?.row?.elapsedSec ?? null, (v) => v != null && v > 3000 && v < 3400);
+  check('loose fil: RE, udstyr og kalorier udeladt', [looseSingle.runs[0]?.row?.relativeEffort, looseSingle.runs[0]?.row?.gear, looseSingle.runs[0]?.row?.calories], (v) => v[0] === null && v[1] === '' && v[2] === null);
+  check('loose fil: header siger metadata fra filen', String(looseSingle.sourceLabel), (v) => v.includes('(fil)') && v.includes('metadata læst fra filen'));
+
+  const looseDirMd = execFileSync('node', ['src/cli.ts', looseDir, '--last', '3'], { encoding: 'utf8' });
+  check('loose mappe: header siger mappe og metadata fra filerne', looseDirMd, (v) => v.includes('(mappe, 4 aktivitetsfiler)') && v.includes('metadata læst fra filerne'));
+  check('loose mappe: noten siger at navnet kommer fra filnavnet', looseDirMd, (v) => v.includes('eksportens navn ikke') && v.includes('kommer fra filnavnet'));
+  check('loose mappe: fil uden brugbar tid sprunget over med note', looseDirMd, (v) => v.includes('sprunget over') && v.includes('UdenTid.gpx'));
+  check('loose mappe: tre løb i digesten', looseDirMd, (v) => v.includes('3 løb i digesten'));
+
+  const looseZones = execFileSync('node', ['src/cli.ts', looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });
+  check('loose: zoner med --max-hr', looseZones, (v) => v.includes('- **Zoner:** Z1 ') && v.includes('fra --max-hr'));
+
+  const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
+  check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zoner: nej'));
+
+  /* ---- fund 1: distance 0 fra fil uden distance må ikke påstå 0 km ---- */
+
+  const noDistTrack = {
+    points: [
+      { t: new Date('2026-10-12T06:30:00Z'), hr: 150 },
+      { t: new Date('2026-10-12T06:35:00Z'), hr: 152 },
+    ],
+    laps: [],
+    sport: 'running',
+    source: 'fit',
+    distanceDerived: false,
+  };
+  const noDistAnalysis = analyseRun(noDistTrack);
+  const noDistRow = rowFromTrack('UdenDistance.fit', noDistTrack, noDistAnalysis);
+  check('loose: fil uden distance giver null i stedet for 0', noDistRow, (v) => v?.distanceM === null);
+  const noDistMd = noDistRow
+    ? renderMarkdown({
+        sourceLabel: 'test',
+        activitiesInExport: 1,
+        runs: [{ row: noDistRow, analysis: noDistAnalysis }],
+        baselineDays: 28,
+        unmatchedHeaders: [],
+        contextText: '',
+        generatedAt: new Date('2026-10-13T08:00:00'),
+        poolLabel: 'Løb',
+      })
+    : '';
+  check('loose: digest uden distance viser – i stedet for 0,00 km', noDistMd.includes('**Pas:** –'), (v) => v === true);
+
+  const zeroDistTrack = {
+    points: [
+      { t: new Date('2026-10-12T06:30:00Z'), distM: 0 },
+      { t: new Date('2026-10-12T06:35:00Z'), distM: 0 },
+    ],
+    laps: [],
+    sport: 'running',
+    source: 'fit',
+    distanceDerived: false,
+  };
+  check('loose: legitim distance 0 vises fortsat som 0', rowFromTrack('NulDistance.fit', zeroDistTrack, analyseRun(zeroDistTrack)), (v) => v?.distanceM === 0);
+
+  /* ---- fund 2: énpunktsfiler må ikke ligne et rigtigt pas ---- */
+
+  const onePointXml = `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>Enkelt</name><type>running</type><trkseg><trkpt lat="55.6761" lon="12.5683"><ele>20</ele><time>2026-10-11T07:00:00Z</time></trkpt></trkseg></trk></gpx>\n`;
+  const onePointTrack = parseActivityBuffer('Enkelt.gpx', Buffer.from(onePointXml));
+  check('loose: énpunktsfil giver ingen digestrække', rowFromTrack('Enkelt.gpx', onePointTrack, analyseRun(onePointTrack)), (v) => v === null);
+
+  enkeltRoot = mkdtempSync(join(tmpdir(), 'strava-digest-enkelt-'));
+  writeFileSync(join(enkeltRoot, 'Enkelt.gpx'), onePointXml);
+  const enkeltList = execFileSync('node', ['src/cli.ts', enkeltRoot, '--list'], { encoding: 'utf8' });
+  check('loose --list: énpunktsfil sprunget over med grund', enkeltList, (v) => v.includes('Enkelt.gpx') && v.includes('(sprunget over)') && v.includes('kun 1 punkt'));
+
+  let looseErr = null;
+  try {
+    execFileSync('node', ['src/cli.ts', join(looseDir, 'UdenTid.gpx')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    looseErr = err;
+  }
+  check('loose: fil uden brugbar tid alene fejler pænt', String(looseErr?.stderr ?? ''), (v) => v.includes('Ingen løb'));
+
+  const emptyDir = join(tmp, 'tom');
+  mkdirSync(emptyDir, { recursive: true });
+  writeFileSync(join(emptyDir, 'note.txt'), 'ingen aktiviteter her');
+  let emptyErr = null;
+  try {
+    execFileSync('node', ['src/cli.ts', emptyDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    emptyErr = err;
+  }
+  check('mappe uden CSV og uden aktivitetsfiler fejler uændret', String(emptyErr?.stderr ?? ''), (v) => v.includes('Kunne ikke finde activities.csv'));
+
+  /* ---- discovery til interaktiv start (Del B) ---- */
+
+  check('isActivityFile: .fit.gz', isActivityFile('a.FIT.GZ'), (v) => v === true);
+  check('isActivityFile: .tcx', isActivityFile('a.tcx'), (v) => v === true);
+  check('isActivityFile: .csv er ikke aktivitet', isActivityFile('activities.csv'), (v) => v === false);
+  check('isActivityFile: .jpg er ikke aktivitet', isActivityFile('media/photo.jpg'), (v) => v === false);
+
+  utimesSync(looseDir, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+  utimesSync(tmp, new Date('2025-01-01T00:00:00Z'), new Date('2025-01-01T00:00:00Z'));
+  const candidates = await discoverSources([tmp, join(tmp, 'findes-ikke'), tmp]);
+  check('discover: dedupliceret på sti', candidates.length, (v) => v === 2);
+  check('discover: nyeste dir først', candidates[0]?.path ?? null, (v) => v === tmp);
+  check('discover: dir selv som csv-mappe', candidates.find((c) => c.path === tmp)?.kind ?? null, (v) => v === 'csv-mappe');
+  check('discover: undermappe som aktivitetsmappe', candidates.find((c) => c.path === looseDir)?.kind ?? null, (v) => v === 'aktivitetsmappe');
+  check('discover: antal aktivitetsfiler i undermappen', candidates.find((c) => c.path === looseDir)?.count ?? null, (v) => v === 4);
+  check('discover: manglende mapper ignoreres', candidates.some((c) => c.path === join(tmp, 'findes-ikke')), (v) => v === false);
+
+  const manyBase = join(tmp, 'mange');
+  for (let i = 0; i < 17; i++) {
+    const d = join(manyBase, `f${String(i).padStart(2, '0')}`);
+    mkdirSync(d, { recursive: true });
+    copyFileSync(join(looseDir, 'Run-1003.gpx'), join(d, 'tur.gpx'));
+  }
+  const many = await discoverSources([manyBase]);
+  check('discover: maks 15 kandidater', many.length, (v) => v === 15);
+  check('discover: kandidaterne er aktivitetsmapper', many.every((c) => c.kind === 'aktivitetsmappe'), (v) => v === true);
+
+  const nestedBase = join(tmp, 'nested');
+  mkdirSync(join(nestedBase, 'ydre', 'indre'), { recursive: true });
+  copyFileSync(join(looseDir, 'Run-1003.gpx'), join(nestedBase, 'ydre', 'indre', 'tur.gpx'));
+  const nested = await discoverSources([nestedBase]);
+  check('discover: rekursivt indhold tælles fortsat med', nested.find((c) => c.path === join(nestedBase, 'ydre'))?.count ?? null, (v) => v === 1);
+  check('discover: rodmappen tæller også rekursivt', nested.find((c) => c.path === nestedBase)?.count ?? null, (v) => v === 1);
+
   // FIT-vejen på en rigtig binær fil (offentlig fixture, se README)
   const fitBuffer = await readFile(new URL('../fixtures/sample.fit', import.meta.url));
   const fitTrack = parseActivityBuffer('sample.fit', fitBuffer);
@@ -223,6 +357,7 @@ try {
   check('kun FIT-grænser: max-puls udledes af øverste grænse', boundsOnlyCfg, (v) => v?.source === 'fit' && v?.maxHr === 190);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
+  if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });
 }
 
 console.log(failures ? `\n${failures} test(s) fejlede` : '\nalle tests bestået');

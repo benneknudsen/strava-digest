@@ -26,7 +26,7 @@ export interface ActivityRow {
   isRun: boolean;
 }
 
-const RUN_TYPES = ['run', 'running', 'trailrun', 'trail run', 'virtualrun', 'virtual run', 'lob', 'loeb'];
+export const RUN_TYPES = ['run', 'running', 'trailrun', 'trail run', 'virtualrun', 'virtual run', 'lob', 'loeb'];
 
 export function toActivities(table: CsvTable, map: ColumnMap): ActivityRow[] {
   const out: ActivityRow[] = [];
