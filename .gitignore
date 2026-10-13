@@ -1,0 +1,12 @@
+node_modules/
+.fixtures/
+fixtures/build*/
+fixtures/*.zip
+runs/
+*.fit
+*.fit.gz
+*.gpx
+*.tcx
+!fixtures/sample.fit
+.DS_Store
+context.md

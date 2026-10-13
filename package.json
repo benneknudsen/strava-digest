@@ -1,0 +1,30 @@
+{
+  "name": "strava-digest",
+  "version": "0.1.0",
+  "description": "Strava bulk-export -> traeningsdigest til en agent",
+  "scripts": {
+    "test": "node scripts/smoke-test.mjs",
+    "start": "node src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "fit-file-parser": "^6.2.2",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/yauzl": "^3.4.0",
+    "typescript": "^7.0.2"
+  },
+  "bin": {
+    "strava-digest": "src/cli.ts"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  }
+}
