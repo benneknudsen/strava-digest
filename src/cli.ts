@@ -6,8 +6,9 @@ import { analyseRun } from './analysis.ts';
 import { mapColumns } from './columns.ts';
 import { parseCsv } from './csv.ts';
 import { renderMarkdown, type DigestedRun } from './digest.ts';
-import { findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
+import { type ExportSource, findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
 import { toActivities } from './strava.ts';
+import { resolveZoneConfig } from './zones.ts';
 
 interface Args {
   input: string;
@@ -18,6 +19,7 @@ interface Args {
   all: boolean;
   baselineDays: number;
   context: string;
+  maxHr: number | null;
 }
 
 const HELP = `strava-digest — Strava-eksport (zip) -> kompakt træningsdigest
@@ -30,6 +32,7 @@ const HELP = `strava-digest — Strava-eksport (zip) -> kompakt træningsdigest
   --out FIL       skriv til fil i stedet for stdout
   --json          maskinlæsbar JSON i stedet for Markdown
   --days N        baseline-vindue i dage (default 28)
+  --max-hr N      max-puls til zonefordeling (Z1–Z5 = 50–100 % af max)
   --context FIL   kontekstfil der flettes ind (default ./context.md hvis den findes)
 
 Zippen læses streamende — intet udpakkes til disk, og media/ røres aldrig.
@@ -64,7 +67,7 @@ async function main(): Promise<number> {
     if (args.list) {
       for (const a of activities.slice(0, 400)) {
         console.log(
-          `${a.date.toISOString().slice(0, 10)}  ${a.isRun ? 'LØB' : '   '}  ${a.type.padEnd(14)}  ${a.filename}`,
+          `${a.date.toISOString().slice(0, 10)}  ${a.isRun ? 'LØB' : '   '}  ${a.type.padEnd(14)}  ${a.filename}  zoner: ${await zoneStatus(source, found.root, a.filename)}`,
         );
       }
       console.log(`\n${activities.length} aktiviteter i alt (vist: ${Math.min(400, activities.length)})`);
@@ -89,7 +92,7 @@ async function main(): Promise<number> {
       try {
         const buf = await source.read(entry);
         const track = parseActivityBuffer(entry, buf);
-        runs.push({ row, analysis: analyseRun(track) });
+        runs.push({ row, analysis: analyseRun(track, resolveZoneConfig(args.maxHr, track.zones)) });
       } catch (err) {
         runs.push({ row, analysis: null, error: err instanceof Error ? err.message : String(err) });
       }
@@ -138,6 +141,7 @@ function parseArgs(argv: string[]): Args {
     all: false,
     baselineDays: 28,
     context: 'context.md',
+    maxHr: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -146,6 +150,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--out') args.out = next();
     else if (a === '--context') args.context = next();
     else if (a === '--days') args.baselineDays = Number(next()) || args.baselineDays;
+    else if (a === '--max-hr') args.maxHr = parseMaxHr(next());
     else if (a === '--json') args.json = true;
     else if (a === '--list') args.list = true;
     else if (a === '--all') args.all = true;
@@ -160,6 +165,27 @@ async function readContext(path: string): Promise<string> {
     return await readFile(resolve(path), 'utf8');
   } catch {
     return '';
+  }
+}
+
+function parseMaxHr(value: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`ugyldig --max-hr: "${value}" — angiv et positivt heltal, fx --max-hr 190`);
+  }
+  return n;
+}
+
+/** Svarer kort på om aktivitetsfilen selv indeholder zonedata (kun FIT kan). */
+async function zoneStatus(source: ExportSource, root: string, filename: string): Promise<'ja' | 'nej'> {
+  if (!/\.fit(\.gz)?$/i.test(filename.trim())) return 'nej';
+  const entry = resolveActivityEntry(source, root, filename);
+  if (!entry) return 'nej';
+  try {
+    const track = parseActivityBuffer(entry, await source.read(entry));
+    return track.zones ? 'ja' : 'nej';
+  } catch {
+    return 'nej';
   }
 }
 
