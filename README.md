@@ -5,7 +5,11 @@ Lokal CLI der laver ét kompakt træningsdigest af Stravas bulk-eksport eller af
 - **Bulk:** zip-filen eller mappen med `activities.csv`.
 - **Løse filer:** en enkelt aktivitetsfil (`.fit`, `.gpx` eller `.tcx`, også `.gz`) eller en mappe med dem.
 
-Zippen læses streamende: intet pakkes ud til disk, `media/` røres aldrig, og `.fit.gz` gunzippes i hukommelsen.
+Zippen læses streamende: intet pakkes ud til disk, og `.fit.gz` gunzippes i hukommelsen.
+
+> **`media/`** i en Strava-eksport er en mappe med billeder og videoer af
+> aktiviteterne. Den er en del af *eksporten*, ikke af din maskine, og
+> værktøjet springer den over med vilje — billeder er ikke træningsdata.
 
 Standard-outputtet er et **agent-format**: én maskinlæsbar linje pr. løb med alle felter, en ugeoversigt, en statistik-sektion og en `SCHEMA`, der fortæller hvad hvert felt betyder. På en eksport med 196 løb er hele digesten ~11.800 tokens mod ~28 MB rådata.
 
@@ -72,9 +76,90 @@ På Windows: brug fuld sti eller `$HOME` i stedet for `~` i PowerShell, og sæt 
 --context FIL   kontekstfil der flettes ind (default ./context.md hvis den findes)
 ```
 
-## Brug det i din agent
+## Sådan fungerer det i praksis
 
-Værktøjet er en almindelig CLI, så det virker i enhver agent der kan køre en kommando. Der er intet agent-specifikt at konfigurere.
+Hele vejen er tre ting: **en zip-fil** (din data), **et CLI** (laver en
+digest ud af den), **en agent** (læser digesten og svarer).
+
+```
+  Strava-konto                  Din maskine                    Din agent
+  ────────────                  ───────────                    ─────────
+  Settings → Download           ~/Downloads/strava_export…zip
+       │                                │
+       │                                │  strava-digest --find
+       │                                │  strava-digest <zip>
+       │                                ▼
+       └──────────────────────▶  ~12.000 tokens digest
+                                        │
+                                        │  skriv din plan i context.md
+                                        ▼
+                                   "Hvordan var min uge?"
+```
+
+Ingen server, ingen konto, ingen upload. Zippen bliver på din maskine, og
+kun *digesten* — altså tallene — når ud til agenten.
+
+### Kom i gang som ny bruger
+
+```bash
+git clone https://github.com/benneknudsen/strava-digest.git
+cd strava-digest
+npm install
+npm link                    # gør `strava-digest` til en global kommando
+```
+
+Bestil derefter din eksport i Strava (**Settings → My Account → Download or
+Delete Your Account**), læg zip'en i `~/Downloads`, og:
+
+```bash
+strava-digest --find               # → /Users/dig/Downloads/strava_export_….zip
+strava-digest ~/Downloads/strava_export_….zip
+```
+
+Uden `npm link` virker `node src/cli.ts <sti>` lige så godt — der er ingen
+build-step.
+
+### Giv agenten adgang
+
+Det er her det bliver interessant. Der er tre niveauer, fra lettest til
+mest automatisk:
+
+**1. Skriv det i chatten.** Den enkleste form:
+
+```bash
+strava-digest ~/Downloads/strava_export_….zip --out ~/strava-digest.txt
+```
+
+Åbn filen, kopier indholdet ind i din agent-chat, og spørg. Virker med enhver
+agent overalt. Ikke automatisk, men virker.
+
+**2. Sæt en skill op.** Repoet indeholder en færdig skill i
+`skills/strava-digest/SKILL.md`. Den forteller agenten, hvad værktøjet er,
+hvordan det findes, og hvad felterne betyder. Kopier den til der agent læser
+skills fra:
+
+```bash
+# Hermes
+mkdir -p ~/.hermes/skills/strava-digest
+cp skills/strava-digest/SKILL.md ~/.hermes/skills/strava-digest/SKILL.md
+
+# Claude Code
+mkdir -p ~/.claude/skills/strava-digest
+cp skills/strava-digest/SKILL.md ~/.claude/skills/strava-digest/SKILL.md
+```
+
+Genstart agenten, og skriv *"hvordan var min uge?"* — agenten finder nu
+selv eksporten og svarer ud fra tallene.
+
+**3. Lad repoet læses automatisk.** `AGENTS.md` i repoet fortæller enhver agent
+der arbejder i mappen, hvad værktøjet gør og hvilke regler der gælder. Agenter
+som Claude Code, Codex, Cursor, Aider og OpenCode læser den automatisk. Den
+er nyttig hvis du *udvikler* på værktøjet — til privat brug er niveau 2
+bedre.
+
+> Hvilken agent bruger du? De fleste kan læse en `SKILL.md` (niveau 2), og
+> enhver agent der kan køre en kommando kan få adgang uden skill overhovedet —
+> bed den bare køre `strava-digest --find` og `strava-digest <sti>`.
 
 ### Trin 1: find eksporten
 
@@ -112,33 +197,11 @@ Ugen: 12.–18. oktober 2026
 - Formål: bygge volumen, ikke jagte pace
 ```
 
-Filen hedder `context.md` i det mappe du kører værktøjet fra, eller du kan pege på en anden med `--context FIL`. Den flettes ind i hver digest.
+Kopier [`context.example.md`](context.example.md) som startpunkt. Filen hedder `context.md` i det mappe du kører værktøjet fra, eller du kan pege på en anden med `--context FIL`. Den flettes ind i hver digest. Den er gitignored, fordi indholdtet er personligt.
 
-### Opsætning i Hermes
+### Om MCP
 
-Har du en skill, der skal kunne finde værktøjet? En minimal skill:
-
-```markdown
----
-name: strava-digest
-description: "Use when the user asks about their running, training or Strava data."
----
-
-# Strava digest
-
-Kør `strava-digest --find` for at finde eksporten, og
-`strava-digest <sti>` for at få digesten. Læs outputtet og svar på
-brugerens spørgsmål med de tal, der er der.
-
-`context.md` i repoet indeholder brugerens egen plan — læs den som
-del af konteksten, ikke som data.
-```
-
-Samme mønster virker i Claude Code, Cursor, Cline og andre agenter der læser en `SKILL.md` eller en `AGENTS.md`.
-
-### Opsætning i en MCP-server
-
-Værktøjet er et CLI, så en MCP-server er en tynd indpakning — kald `strava-digest` som en tool og returnér stdout. Der er ingen grund til at bygge en MCP-server *til* værktøjet, men det er den vej, hvis din agent kun taler MCP.
+Værktøjet er et CLI, så en MCP-server er en tynd indpakning — kald `strava-digest` som en tool og returnér stdout. Det er den vej, hvis din agent *kun* taler MCP.
 
 ### Hvad agenten får at læse
 
@@ -380,7 +443,7 @@ Eksporten er **lokaliseret**, og det er en kendt fælde: en tredjeparts importer
 - **`activities.csv` er autoritativ** for koblingen aktivitets-ID → filnavn; manglende filer giver en note på turen i stedet for et crash.
 - **Varierende formater**: samme tur kan være `.fit.gz`, `.fit`, `.tcx.gz`, `.tcx` eller `.gpx`. Mangler distancen i filen, udledes den af GPS (haversine), og mangler hastigheden, udledes den af distance/tid med glatning.
 - **Mislabellede `.gz`**: en `.fit.gz` der ikke er gzip falder tilbage til rå bytes.
-- **Arkiver læses streamende**: `media/` røres aldrig, og intet pakkes ud til disk.
+- **Arkiver læses streamende**: `media/` (billeder og videoer inde i eksporten) springes over, og intet pakkes ud til disk.
 
 ## Fejlfinding og kendte grænser
 
