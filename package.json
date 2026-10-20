@@ -37,7 +37,17 @@
   "bin": {
     "strava-digest": "src/cli.ts"
   },
-  "private": true,
+  "files": [
+    "src/",
+    "skills/",
+    "scripts/smoke-test.mjs",
+    "scripts/measure-compression.mjs",
+    "scripts/make-fixtures.mjs",
+    "context.example.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "private": false,
   "engines": {
     "node": ">=22.18"
   }

@@ -125,7 +125,7 @@ export function renderMarkdown(input: DigestInput): string {
   const notes: string[] = [];
   if (input.unmatchedHeaders.length) {
     notes.push(
-      `Unmapped columns: ${input.unmatchedHeaders.slice(0, 12).join(' · ')}${input.unmatchedHeaders.length > 12 ? ' …' : ''}`,
+      `Unmapped columns (${input.unmatchedHeaders.length}): ${input.unmatchedHeaders.slice(0, 12).join(' · ')}${input.unmatchedHeaders.length > 12 ? ' …' : ''}`,
     );
   }
   if (input.hostNote) notes.push(input.hostNote);
@@ -209,7 +209,12 @@ function renderRun(run: DigestedRun, index: number, zoneHint?: string): string[]
     if (analysis.paceCvPct != null) signals.push(`pace consistency CV ${num(analysis.paceCvPct, 1)} %`);
     if (signals.length) lines.push(`- **Signals:** ${signals.join(' · ')}`);
     if (analysis.zonePct && analysis.zoneMaxHr != null) {
-      const source = analysis.zoneSource === 'fit' ? 'from the watch' : 'from --max-hr';
+      const source =
+        analysis.zoneSource === 'fit'
+          ? 'from the watch'
+          : analysis.zoneSource === 'export-observation'
+            ? 'observed in the export, not --max-hr'
+            : 'from --max-hr';
       lines.push(
         `- **Zones:** ${zoneLine(analysis.zonePct)} (max HR ${num(analysis.zoneMaxHr)}, ${source})`,
       );

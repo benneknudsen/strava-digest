@@ -1,7 +1,7 @@
 // Smoke-test: genererer syntetiske fixtures (ingen persondata), kører hele
 // pipelinen og fejler hvis nøgletallene ikke stemmer. Kør med `npm test`.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -263,6 +263,32 @@ try {
     /^d=.*\sz=[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+/m.test(v),
   );
   check('uden --max-hr har turene en load', cliNoHr, (v) => /^d=.*\sload=\d+/m.test(v));
+
+  // Agent-formatet skal ikke dumpe Stravas kolonnenavne i modellens kontekst.
+  // Det er diagnostik, ikke træningsdata — tallet og en henvisning er nok.
+  // Derfor laves der en eksport med en ekstra, ukendt kolonne.
+  const extraCsv = join(tmp, 'activities.csv');
+  const extraDir = join(tmp, '..', `strava-extra-${Date.now()}`);
+  mkdirSync(extraDir, { recursive: true });
+  const srcCsv = readFileSync(extraCsv, 'utf8');
+  const lines = srcCsv.split('\n');
+  const header = lines[0]!;
+  const withExtra = [
+    header + ',Vindhastighed',
+    ...lines.slice(1).filter(Boolean).map((l) => l + ',12,3'),
+  ].join('\n');
+  writeFileSync(join(extraDir, 'activities.csv'), withExtra);
+  const extraAgent = execFileSync('node', ['src/cli.ts', extraDir], { encoding: 'utf8' });
+  const extraMd = execFileSync('node', ['src/cli.ts', extraDir, '--format', 'md'], { encoding: 'utf8' });
+
+  check('agent-formatet tæller uventede kolonner i stedet for at liste dem', extraAgent, (v) =>
+    /\d+ Strava columns in the export are not used/.test(v) &&
+    !/Unmapped columns:/.test(v) &&
+    !v.includes('Vindhastighed'),
+  );
+  check('markdown-formatet beholder listen', extraMd, (v) =>
+    /Unmapped columns \(\d+\)/.test(v) && v.includes('Vindhastighed'),
+  );
   check('CLI-agent har WINDOW-sektion', cliZones.includes('## WINDOW'), (v) => v === true);
   check('CLI-agent har STATS-sektion', cliZones.includes('## STATS'), (v) => v === true);
   check('CLI-agent har WEEKS-sektion', cliZones.includes('## WEEKS'), (v) => v === true);

@@ -2,8 +2,14 @@
 
 Turns a Strava bulk export into one compact training digest — splits, heart-rate
 drift, zones, training load, trends — so an agent can read a whole running
-history for ~14,500 tokens instead of ~22 MB of GPS data. **442× smaller**, on
+history for ~14,000 tokens instead of ~22 MB of GPS data. **457× smaller**, on
 a real 196-run export.
+
+```bash
+npm install -g strava-digest
+```
+
+Or from source:
 
 ```bash
 git clone https://github.com/benneknudsen/strava-digest.git && cd strava-digest
@@ -78,9 +84,9 @@ SKILL.md (4 KB)       = instructions. Tells the agent to run the command.
                         Loaded only when relevant. Holds no data.
 
 strava-digest <zip>   = the compression. Runs locally; the agent never opens
-                        the zip. 22 MB of raw data → ~14,500 tokens.
+                        the zip. 22 MB of raw data → ~14,000 tokens.
 
-The digest (51 kB)    = what the agent actually reads.
+The digest (49 kB)    = what the agent actually reads.
 ```
 
 The skill is not a replacement for the compression — it is the **binding**
@@ -135,12 +141,12 @@ RAW
     XML (tcx/gpx)   18.3 MB  ≈ 5 341 344 tokens
 
 DIGEST
-  digest            50.9 kB  (52110 bytes)  ≈ 14 475 tokens  (196 runs)
+  digest            49.2 kB  (50349 bytes)  ≈ 13 986 tokens  (196 runs)
 
 SAVING
-  442× smaller  —  21.9 MB saved, 99.77 % of the raw size
-  442× fewer tokens than the whole export
-  369× fewer tokens than the XML a model can even read
+  457× smaller  —  21.9 MB saved, 99.78 % of the raw size
+  457× fewer tokens than the whole export
+  382× fewer tokens than the XML a model can even read
 ```
 
 The bytes are exact; the token counts are estimated at ~3.6 characters per
@@ -149,7 +155,7 @@ token, which is close for both XML and the dense machine format.
 Two things worth noticing. First, `media/` — 6 MB of photos and videos — is
 never read at all. Second, 3.1 MB of the activity files are **binary FIT**,
 which no model can read at all; the tool parses them, which is the entire
-job. The honest comparison is therefore the 18.3 MB of XML: **369× fewer
+job. The honest comparison is therefore the 18.3 MB of XML: **382× fewer
 tokens**, and every number in the digest is one the model can actually
 reason about.
 

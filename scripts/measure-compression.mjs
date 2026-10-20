@@ -17,6 +17,7 @@
  * number; the token ratio follows from it.
  */
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { open as openZip } from 'yauzl';
@@ -70,10 +71,12 @@ await new Promise((resolve, reject) => {
 
 /* ---- 2. the digest side: run the tool for real ---- */
 
+// Koeres fra en tom mappe, saa et context.md i repoen ikke bliver en del af
+// maalingen - ellers ville tallet afhaenge af den, der koerer scriptet.
 const run = spawnSync(
   process.execPath,
   [join(repo, 'src', 'cli.ts'), exportPath],
-  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd: tmpdir() },
 );
 if (run.status !== 0) {
   console.error(run.stderr || 'the digest run failed');

@@ -265,7 +265,10 @@ async function runBulk(
     maxHrSource: zoneSource,
     notes: [
       ...(map.unmatched.length
-        ? ['Unmapped columns: ' + map.unmatched.join(' · ')]
+        ? [
+            `${map.unmatched.length} Strava columns in the export are not used — they hold weather, gear ` +
+              'and other non-training data. Run with --format md to list them.',
+          ]
         : []),
       ...(args.maxHr == null && observedMaxHr != null
         ? [
@@ -276,7 +279,7 @@ async function runBulk(
     ],
     zoneHint:
       args.maxHr == null && observedMaxHr != null
-        ? `zones use the highest heart rate in the export (${observedMaxHr}), observed — pass --max-hr <your max> to use your own`
+        ? `zones use the highest heart rate in the export (${observedMaxHr}) — it is observed, not your watch's max. Pass --max-hr <your max> to use your own.`
         : undefined,
     hostNote: map.unmatched.length
       ? 'Add aliases in src/columns.ts if a field is missing from the digest.'

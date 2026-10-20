@@ -238,8 +238,10 @@ export function normalizeHeader(h: string): string {
 export interface ColumnMap {
   /** field -> column indexes (duplicates kept, first non-empty wins) */
   index: Map<Field, number[]>;
-  /** headers we could not place */
+  /** headers we could not place, and that hold a value in at least one row */
   unmatched: string[];
+  /** headers we could not place that are empty in every row */
+  unmatchedEmpty: number;
 }
 
 export function mapColumns(table: CsvTable): ColumnMap {
@@ -273,8 +275,21 @@ export function mapColumns(table: CsvTable): ColumnMap {
     }
   }
 
-  const unmatched = table.headers.filter((_, i) => !used.has(i)).filter(Boolean);
-  return { index, unmatched };
+  // Strava's export has 50+ optional columns, and almost all of them are
+  // empty for almost every activity. Listing them all is noise: the point
+  // of the note is to say what the tool chose not to use, and an empty
+  // column carries no information worth an agent's tokens. So only the
+  // columns that actually hold a value are reported.
+  const unmatchedIdx = table.headers
+    .map((_, i) => i)
+    .filter((i) => !used.has(i))
+    .filter((i) => table.headers[i]);
+  const populatedIdx = unmatchedIdx.filter((i) =>
+    table.rows.some((row) => (row[i] ?? '').trim() !== ''),
+  );
+  const unmatched = populatedIdx.map((i) => table.headers[i]!);
+  const unmatchedEmpty = unmatchedIdx.length - populatedIdx.length;
+  return { index, unmatched, unmatchedEmpty };
 }
 
 export function raw(row: string[], map: ColumnMap, field: Field): string {
