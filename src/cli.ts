@@ -9,6 +9,7 @@ import { parseCsv } from './csv.ts';
 import { renderMarkdown, type DigestInput, type DigestedRun } from './digest.ts';
 import { renderAgent } from './agent.ts';
 import { discoverSources, pickSource, searchDirs, type Candidate } from './interactive.ts';
+import { installSkill, renderInstall } from './install.ts';
 import { collectActivityFiles, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
 import { type ExportSource, findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
 import { type ActivityRow, toActivities } from './strava.ts';
@@ -40,6 +41,7 @@ const HELP = `strava-digest — aktivitetsfiler eller Strava-eksport (zip) -> ko
   --all           tag alle aktivitetstyper med, ikke kun løb
   --list          vis kun indekset af aktiviteter
   --find          find mulige eksporter og print dem som stier (én pr. linje)
+  --install-skill kopierer agent-skillen til de agenter der findes på maskinen
   --out FIL       skriv til fil i stedet for stdout
   --json          maskinlæsbar JSON i stedet for digest
   --format md     menneskelæsbar Markdown i stedet for agent-format
@@ -80,6 +82,14 @@ async function main(): Promise<number> {
   // det til at lokalisere eksporten, før den kører værktøjet.
   if (argv.includes('--find')) {
     return findSources();
+  }
+  // --install-skill: gør agenten klar med én kommando.
+  if (argv.includes('--install-skill')) {
+    const i = argv.indexOf('--install-skill');
+    const explicit = argv[i + 1] && !argv[i + 1]!.startsWith('--') ? argv[i + 1]! : undefined;
+    const { results, source } = await installSkill(explicit ? [explicit] : undefined);
+    console.log(renderInstall({ results, source }));
+    return results.some((r) => r.status !== 'fejlede') ? 0 : 1;
   }
   if (!argv.length) {
     if (!process.stdin.isTTY) {

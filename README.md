@@ -133,23 +133,33 @@ strava-digest ~/Downloads/strava_export_….zip --out ~/strava-digest.txt
 Åbn filen, kopier indholdet ind i din agent-chat, og spørg. Virker med enhver
 agent overalt. Ikke automatisk, men virker.
 
-**2. Sæt en skill op.** Repoet indeholder en færdig skill i
-`skills/strava-digest/SKILL.md`. Den forteller agenten, hvad værktøjet er,
-hvordan det findes, og hvad felterne betyder. Kopier den til der agent læser
-skills fra:
+**2. Sæt en skill op.** Én kommando installerer skillen i de agenter, der findes på maskinen:
 
 ```bash
-# Hermes
-mkdir -p ~/.hermes/skills/strava-digest
-cp skills/strava-digest/SKILL.md ~/.hermes/skills/strava-digest/SKILL.md
-
-# Claude Code
-mkdir -p ~/.claude/skills/strava-digest
-cp skills/strava-digest/SKILL.md ~/.claude/skills/strava-digest/SKILL.md
+strava-digest --install-skill
 ```
 
-Genstart agenten, og skriv *"hvordan var min uge?"* — agenten finder nu
-selv eksporten og svarer ud fra tallene.
+```
+strava-digest — skill installeret
+
+  installeret  Hermes  →  /Users/dig/.hermes/skills/strava-digest/SKILL.md
+  installeret  Claude Code  →  /Users/dig/.claude/skills/strava-digest/SKILL.md
+  ikke fundet  Cursor
+  ikke fundet  Codex
+
+Genstart agenten, og spørg den om dine løb.
+Fx: "hvordan var min uge?" eller "hvad var min langseste tur?"
+```
+
+Kun agenter der faktisk er installeret, får en skill. En eksisterende skill opdateres der hvor den ligger — også hvis agenten har lagt den i en undermappe — så du ikke ender med to skills med samme navn. Din egen tilpasning sikkerhedskopieres til `SKILL.md.bak` før den overskrives.
+
+Med en mappeangivelse installeres den et bestemt sted:
+
+```bash
+strava-digest --install-skill ~/.hermes/skills
+```
+
+Skillen ligger også i repoet som `skills/strava-digest/SKILL.md`, hvis du vil læse den eller kopiere den selv.
 
 **3. Lad repoet læses automatisk.** `AGENTS.md` i repoet fortæller enhver agent
 der arbejder i mappen, hvad værktøjet gør og hvilke regler der gælder. Agenter
@@ -199,11 +209,34 @@ Ugen: 12.–18. oktober 2026
 
 Kopier [`context.example.md`](context.example.md) som startpunkt. Filen hedder `context.md` i det mappe du kører værktøjet fra, eller du kan pege på en anden med `--context FIL`. Den flettes ind i hver digest. Den er gitignored, fordi indholdtet er personligt.
 
+### Sprog
+
+Strava oversætter eksporten til **kontosproget**, så det samme værktøj skal
+læse forskellige sprog. Dette er dækket:
+
+| Hvad | Dækket |
+|---|---|
+| Kolonnenavne i `activities.csv` | engelsk + dansk (`aktivitet dato`, `gennemsnitlig puls`, `maks puls`, `bevægelsestid`, …) |
+| Månedsnavne i datoer | engelsk + dansk (`Oct 12, 2026` og `12. okt. 2026`) |
+| Dato-rækkefølge | dag-først (`12.10.2026`), måned-først (`10/12/2026`), ISO (`2026-10-12`) |
+| Aktivitetstyper | engelsk + dansk (`Run`, `Løb`), med `ø/æ/å`-normalisering |
+| 12-timers ur | `AM`/`PM` |
+
+**Output er på dansk** — CLI-hjælpen og Markdown-digesten. Det er den
+menneskelæsbare del. **Agent-formatet er sprogneutralt**: feltnavnene er
+`km`, `t`, `pace`, `hr`, `z`, `drift`, `load`, så en agent læser det på
+samme måde uanset sprog.
+
+Et tredje sprog (tysk, svensk, nederlandsk …) kræver, at et par aliaser
+lægges i `src/columns.ts` — de er alle i én tabel. Værktøjet siger det
+helt konkret, hvis en kolonne ikke genkendes: den printer den rigtige
+header-række, så et nyt alias er én linje.
+
 ### Om MCP
 
 Værktøjet er et CLI, så en MCP-server er en tynd indpakning — kald `strava-digest` som en tool og returnér stdout. Det er den vej, hvis din agent *kun* taler MCP.
 
-### Hvad agenten får at læse
+## Hvad agenten får at læse
 
 ```
 # STRAVA DIGEST v2 (agent-format)

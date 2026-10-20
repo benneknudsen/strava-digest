@@ -1,7 +1,7 @@
 // Smoke-test: genererer syntetiske fixtures (ingen persondata), kører hele
 // pipelinen og fejler hvis nøgletallene ikke stemmer. Kør med `npm test`.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -257,6 +257,28 @@ try {
   check('--find finder eksportmappen', findOut.includes(tmp), (v) => v === true);
   check('--find har ingen overskrift', !findOut.includes('Kandidat') && !findOut.includes('Vælg'), (v) => v === true);
   check('--find kører uden TTY', findOut.length > 0, (v) => v === true);
+
+  // --install-skill: kopierer skillen, så agenten kan bruge værktøjet
+  const skillDir = join(tmp, 'skills', 'strava-digest');
+  const instOut = execFileSync('node', [cliPath, '--install-skill', join(tmp, 'skills')], { encoding: 'utf8' });
+  check('--install-skill skriver SKILL.md', existsSync(join(skillDir, 'SKILL.md')), (v) => v === true);
+  check('--install-skill fortæller hvor den landede', instOut.includes('SKILL.md'), (v) => v === true);
+  check('--install-skill siger hvad der skal spørges om', instOut.includes('hvordan var min uge'), (v) => v === true);
+  const installed = await readFile(join(skillDir, 'SKILL.md'), 'utf8');
+  check('installeret skill har gyldig frontmatter', installed.startsWith('---\nname: strava-digest'), (v) => v === true);
+  check('installeret skill er generisk (ingen personlige oplysninger)', !/macmini|Benjamin/i.test(installed), (v) => v === true);
+
+  // En eksisterende skill skal opdateres in place, ikke duplikeres —
+  // to skills med samme navn er et reelt problem for agenten.
+  // Frisk mappe med KUN en kategoriseret skill, som en agent der
+  // grupperer skills i kategorier ville have den.
+  const skillRoot2 = join(tmp, 'skills2');
+  mkdirSync(join(skillRoot2, 'kategori', 'strava-digest'), { recursive: true });
+  writeFileSync(join(skillRoot2, 'kategori', 'strava-digest', 'SKILL.md'), '---\nname: strava-digest\n---\ntilpasset\n');
+  execFileSync('node', [cliPath, '--install-skill', skillRoot2], { encoding: 'utf8' });
+  check('eksisterende skill opdateres in place', (await readFile(join(skillRoot2, 'kategori', 'strava-digest', 'SKILL.md'), 'utf8')).includes('When to Use'), (v) => v === true);
+  check('tilpasset version sikkerhedskopieres', existsSync(join(skillRoot2, 'kategori', 'strava-digest', 'SKILL.md.bak')), (v) => v === true);
+  check('ingen duplikat-skill dannes', existsSync(join(skillRoot2, 'strava-digest')), (v) => v === false);
 
   let hrErr = null;
   try {
