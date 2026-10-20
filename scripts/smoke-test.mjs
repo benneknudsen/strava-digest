@@ -185,7 +185,7 @@ try {
   });
   check('digest indeholder splits', md.includes('Splits'), (v) => v === true);
   check('digest indeholder kontekst', md.includes('Testkontekst'), (v) => v === true);
-  check('digest uden max-puls: note om manglende zoner', md.includes('- _note: ingen zonefordeling (ingen max-puls — sæt --max-hr)_'), (v) => v === true);
+  check('digest uden max-puls: note om manglende zoner', md.includes('- _note: no zone split (no max HR — set --max-hr)_'), (v) => v === true);
   const bytes = Buffer.byteLength(md, 'utf8');
   const rawBytes = statSync(join(tmp, 'activities/Run-1001.gpx')).size;
   console.log(`      digest: ${bytes} tegn · rå GPX for samme tur: ${rawBytes} tegn (${Math.round(rawBytes / bytes)}x)`);
@@ -205,9 +205,9 @@ try {
     generatedAt: new Date('2026-10-13T08:00:00'),
     poolLabel: 'Løb',
   });
-  check('digest viser zoner pr. løb', mdZones.includes('- **Zoner:** Z1 '), (v) => v === true);
-  check('digest viser zonekilde', mdZones.includes('(max-puls 210, fra --max-hr)'), (v) => v === true);
-  check('baseline summer zoner i vinduet', mdZones.includes('- zoner: Z1 ') && mdZones.includes('roligt (Z1–Z2)'), (v) => v === true);
+  check('digest viser zoner pr. løb', mdZones.includes('- **Zones:** Z1 '), (v) => v === true);
+  check('digest viser zonekilde', mdZones.includes('(max HR 210, from --max-hr)'), (v) => v === true);
+  check('baseline summer zoner i vinduet', mdZones.includes('- zones: Z1 ') && mdZones.includes('easy (Z1–Z2)'), (v) => v === true);
   check('zonedigest fortsat under 4 KB', Buffer.byteLength(mdZones, 'utf8'), (v) => v < 4096);
 
   await source.close();
@@ -222,9 +222,9 @@ try {
 
   // Markdown-formatet er stadig tilgængeligt med --format md
   const cliMd = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--format', 'md'], { encoding: 'utf8' });
-  check('--format md giver menneske-Markdown', cliMd.includes('# Træningsdigest'), (v) => v === true);
-  check('--format md viser Zoner-linje', cliMd.includes('- **Zoner:** Z1 '), (v) => v === true);
-  check('--format md viser baseline-roligt', cliMd.includes('roligt (Z1–Z2)'), (v) => v === true);
+  check('--format md giver menneske-Markdown', cliMd.includes('# Training digest'), (v) => v === true);
+  check('--format md viser Zoner-linje', cliMd.includes('- **Zones:** Z1 '), (v) => v === true);
+  check('--format md viser baseline-roligt', cliMd.includes('easy (Z1–Z2)'), (v) => v === true);
 
   const cliJson = JSON.parse(
     execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--json'], { encoding: 'utf8' }),
@@ -242,8 +242,25 @@ try {
   check('CLI-agent har splits for detaljerede løb', /sp=\d+:/.test(cliZones), (v) => v === true);
   check('CLI-agent bruger punktum som decimaltegn', cliZones.includes('km=10.00'), (v) => v === true);
 
+  // Output er engelsk, så ethvert agent-setup kan læse den. Regression-guard:
+  // hvis en dansk strenge sniger sig ind i en overskrift eller en note, skal
+  // det fange sig her.
+  check('agent-formatets overskrifter er engelske', cliZones, (v) =>
+    v.includes('## SCHEMA') &&
+    v.includes('## WEEKS (newest first)') &&
+    v.includes('## WINDOW (last 28 days vs. the 28 days before)') &&
+    v.includes('## RUNS') &&
+    v.includes('## STATS (whole period)'),
+  );
+  check('ingen danske overskrifter i agent-formatet', cliZones, (v) =>
+    !/## (UGER|VINDUE|LØB|STATISTIKK|SIGNALER|KONTEKST|NOTER|BEMÆRKNINGER)/.test(v),
+  );
+  check('ingen dansk zone-note i agent-formatet', cliZones, (v) =>
+    !v.includes('zoner bruger') && !v.includes('ingen kilde'),
+  );
+
   const cliList = execFileSync('node', ['src/cli.ts', tmp, '--list'], { encoding: 'utf8' });
-  check('--list viser zone-status', cliList.includes('zoner: nej'), (v) => v === true);
+  check('--list viser zone-status', cliList.includes('zones: no'), (v) => v === true);
 
   // --find: maskinlæsbart, én sti pr. linje, exit-kode der afslører fund.
   // Køres med fixture'en som cwd, så den scanner den og ikke repoet.
@@ -255,7 +272,7 @@ try {
   const isAbsolute = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);
   check('--find printer absolutte stier uden nummerering', findLines.every(isAbsolute), (v) => v === true);
   check('--find finder eksportmappen', findOut.includes(tmp), (v) => v === true);
-  check('--find har ingen overskrift', !findOut.includes('Kandidat') && !findOut.includes('Vælg'), (v) => v === true);
+  check('--find har ingen overskrift', !findOut.includes('Kandidat') && !findOut.includes('Vælg') && !findOut.includes('Pick a number'), (v) => v === true);
   check('--find kører uden TTY', findOut.length > 0, (v) => v === true);
 
   // --install-skill: kopierer skillen, så agenten kan bruge værktøjet
@@ -263,7 +280,7 @@ try {
   const instOut = execFileSync('node', [cliPath, '--install-skill', join(tmp, 'skills')], { encoding: 'utf8' });
   check('--install-skill skriver SKILL.md', existsSync(join(skillDir, 'SKILL.md')), (v) => v === true);
   check('--install-skill fortæller hvor den landede', instOut.includes('SKILL.md'), (v) => v === true);
-  check('--install-skill siger hvad der skal spørges om', instOut.includes('hvordan var min uge'), (v) => v === true);
+  check('--install-skill siger hvad der skal spørges om', instOut.includes('how was my week'), (v) => v === true);
   const installed = await readFile(join(skillDir, 'SKILL.md'), 'utf8');
   check('installeret skill har gyldig frontmatter', installed.startsWith('---\nname: strava-digest'), (v) => v === true);
   check('installeret skill er generisk (ingen personlige oplysninger)', !/macmini|Benjamin/i.test(installed), (v) => v === true);
@@ -301,19 +318,19 @@ try {
   check('loose fil: navn = filnavn uden endelse', looseSingle.runs[0]?.row?.name ?? null, (v) => v === 'Run-1001');
   check('loose fil: elapsed fra første til sidste punkt', looseSingle.runs[0]?.row?.elapsedSec ?? null, (v) => v != null && v > 3000 && v < 3400);
   check('loose fil: RE, udstyr og kalorier udeladt', [looseSingle.runs[0]?.row?.relativeEffort, looseSingle.runs[0]?.row?.gear, looseSingle.runs[0]?.row?.calories], (v) => v[0] === null && v[1] === '' && v[2] === null);
-  check('loose fil: header siger metadata fra filen', String(looseSingle.sourceLabel), (v) => v.includes('(fil)') && v.includes('metadata læst fra filen'));
+  check('loose fil: header siger metadata fra filen', String(looseSingle.sourceLabel), (v) => v.includes('(file)') && v.includes('metadata read from the file'));
 
   const looseDirMd = execFileSync('node', ['src/cli.ts', looseDir, '--last', '3', '--format', 'md'], { encoding: 'utf8' });
-  check('loose mappe: header siger mappe og metadata fra filerne', looseDirMd, (v) => v.includes('(mappe, 4 aktivitetsfiler)') && v.includes('metadata læst fra filerne'));
+  check('loose mappe: header siger mappe og metadata fra filerne', looseDirMd, (v) => v.includes('(folder, 4 activity files)') && v.includes('metadata read from the files'));
   check('loose mappe: noten siger at navnet kommer fra filnavnet', looseDirMd, (v) => v.includes('eksportens navn ikke') && v.includes('kommer fra filnavnet'));
   check('loose mappe: fil uden brugbar tid sprunget over med note', looseDirMd, (v) => v.includes('sprunget over') && v.includes('UdenTid.gpx'));
-  check('loose mappe: tre løb i digesten', looseDirMd, (v) => v.includes('3 løb i digesten'));
+  check('loose mappe: tre løb i digesten', looseDirMd, (v) => v.includes('3 runs in digest'));
 
   const looseZones = execFileSync('node', ['src/cli.ts', looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });
   check('loose: zoner med --max-hr', looseZones, (v) => /z=\d/.test(v) && v.includes('max_hr=240 source=flag'));
 
   const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
-  check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zoner: nej'));
+  check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zones: no'));
 
   /* ---- fund 1: distance 0 fra fil uden distance må ikke påstå 0 km ---- */
 
@@ -342,7 +359,7 @@ try {
         poolLabel: 'Løb',
       })
     : '';
-  check('loose: digest uden distance viser – i stedet for 0,00 km', noDistMd.includes('**Pas:** –'), (v) => v === true);
+  check('loose: digest uden distance viser – i stedet for 0,00 km', noDistMd.includes('**Run:** –'), (v) => v === true);
 
   const zeroDistTrack = {
     points: [
@@ -365,7 +382,7 @@ try {
   enkeltRoot = mkdtempSync(join(tmpdir(), 'strava-digest-enkelt-'));
   writeFileSync(join(enkeltRoot, 'Enkelt.gpx'), onePointXml);
   const enkeltList = execFileSync('node', ['src/cli.ts', enkeltRoot, '--list'], { encoding: 'utf8' });
-  check('loose --list: énpunktsfil sprunget over med grund', enkeltList, (v) => v.includes('Enkelt.gpx') && v.includes('(sprunget over)') && v.includes('kun 1 punkt'));
+  check('loose --list: énpunktsfil sprunget over med grund', enkeltList, (v) => v.includes('Enkelt.gpx') && v.includes('(skipped)') && v.includes('only 1 point'));
 
   let looseErr = null;
   try {
@@ -373,7 +390,7 @@ try {
   } catch (err) {
     looseErr = err;
   }
-  check('loose: fil uden brugbar tid alene fejler pænt', String(looseErr?.stderr ?? ''), (v) => v.includes('Ingen løb'));
+  check('loose: fil uden brugbar tid alene fejler pænt', String(looseErr?.stderr ?? ''), (v) => v.includes('No runs found'));
 
   const emptyDir = join(tmp, 'tom');
   mkdirSync(emptyDir, { recursive: true });
@@ -384,7 +401,7 @@ try {
   } catch (err) {
     emptyErr = err;
   }
-  check('mappe uden CSV og uden aktivitetsfiler fejler uændret', String(emptyErr?.stderr ?? ''), (v) => v.includes('Kunne ikke finde activities.csv'));
+  check('mappe uden CSV og uden aktivitetsfiler fejler uændret', String(emptyErr?.stderr ?? ''), (v) => v.includes('Could not find activities.csv'));
 
   /* ---- discovery til interaktiv start (Del B) ---- */
 
@@ -443,7 +460,7 @@ try {
     generatedAt: new Date('2026-10-13T08:00:00'),
     poolLabel: 'Løb',
   });
-  check('digest uden pulsdata: note om pulsdata frem for --max-hr', mdNoHr.includes('- _note: ingen zonefordeling (turen har ingen pulsdata)_'), (v) => v === true);
+  check('digest uden pulsdata: note om pulsdata frem for --max-hr', mdNoHr.includes('- _note: no zone split (this run has no heart-rate data)_'), (v) => v === true);
 
   // FIT med zones_target + hr_zone: zonerne skal læses fra filen
   const zonedTrack = parseActivityBuffer('zonetest.fit', makeFitZones({ maxHr: 190, zoneHighs: [114, 133, 152, 171] }));
@@ -464,8 +481,13 @@ try {
   //    faldt alle 195 løb ud af puljen, og digesten viste 5 "løb" i stedet.
   check('dansk type "Løb" normaliseres til løb', normalizeType('Løb'), (v) => v === 'lob');
   check('dansk type "Løb" tælles som løb', RUN_TYPES.includes(normalizeType('Løb')), (v) => v === true);
-  check('norsk type "Løp" tælles ikke som løb', RUN_TYPES.includes(normalizeType('Løp')), (v) => v === false);
-  check('svensk typografi "Löp" tælles ikke som løb', RUN_TYPES.includes(normalizeType('Löp')), (v) => v === false);
+  // "Løp" (norsk) og "Löp" (svensk) er de oversatte ord for "Run", så de
+  // skal tælle som løb. Før var de grønne som "tælles ikke som løb", men kun
+  // fordi normaliseringen slettede ö i stedet for at folde den: "Löp" blev
+  // til "lp", som intet alias nogensinde kunne ramme. En svensk konto ville
+  // derfor have vist 0 løb helt lydløst.
+  check('norsk type "Løp" tælles som løb', RUN_TYPES.includes(normalizeType('Løp')), (v) => v === true);
+  check('svensk type "Löp" tælles som løb', RUN_TYPES.includes(normalizeType('Löp')), (v) => v === true);
   check('cykeltur tælles ikke som løb', normalizeType('Virtuel cykeltur') === 'lob', (v) => v === false);
 
   // 2) Eksportens datoer er UTC — bekræftet mod FIT/GPX i samme arkiv.
@@ -475,6 +497,55 @@ try {
   check('lokal gengivelse følger maskinens zone', utcDate?.getHours(), (v) => v === new Date('2026-10-16T08:18:29Z').getHours());
   const isoDate = parseDate('2026-10-16T08:18:29Z');
   check('ISO-dato tolkes uændret', isoDate?.toISOString(), (v) => v === '2026-10-16T08:18:29.000Z');
+
+  // Strava skriver månedsnavnet på kontosproget. Samme dato skal kunne læses
+  // på engelsk, dansk, tysk, fransk, svensk og spansk.
+  const monthForms = [
+    ['engelsk', 'Oct 12, 2026, 06:32', '2026-10-12'],
+    ['dansk', '12. okt. 2026, 06:32', '2026-10-12'],
+    ['tysk', '12. Okt. 2026, 06:32', '2026-10-12'],
+    ['tysk med accent', '12. März 2026, 06:32', '2026-03-12'],
+    ['fransk', '12 février 2026, 06:32', '2026-02-12'],
+    ['svensk', '12 oktober 2026, 06:32', '2026-10-12'],
+    ['spansk', '12 de octubre de 2026, 06:32', '2026-10-12'],
+  ];
+  for (const [lang, raw, expected] of monthForms) {
+    const d = parseDate(raw);
+    check(
+      `dato med månedsnavn på ${lang} tolkes`,
+      d?.toISOString().slice(0, 10),
+      (v) => v === expected,
+    );
+  }
+
+  // Aktivitetstypen kommer også oversat: "Run" bliver "Løb" på dansk,
+  // "Lauf" på tysk, "Löpning" på svensk. Uden normalisering falder hele
+  // historikken ud af puljen.
+  for (const [lang, type] of [
+    ['dansk', 'Løb'],
+    ['tysk', 'Lauf'],
+    ['svensk', 'Löpning'],
+    ['nederlandsk', 'Hardlopen'],
+    ['fransk', 'Course à pied'],
+  ]) {
+    check(
+      `aktivitetstype på ${lang} tæller som løb`,
+      normalizeType(type) !== type && RUN_TYPES.includes(normalizeType(type)),
+      (v) => v === true,
+    );
+  }
+
+  // Kolonnenavne kommer oversatte. Et tysk eksport skal finde de samme felter.
+  const germanHeaders = parseCsv(
+    [
+      'Aktivitäts-ID;Aktivitätsdatum;Aktivitätsname;Aktivitätstyp;Gesamtzeit;Bewegungszeit;Distanz;Durchschnittliche Herzfrequenz;Maximale Herzfrequenz;Höhenanstieg;Kalorien;Aktivitätsausrüstung;Dateiname',
+      '1001;12. Okt. 2026, 06:32;Morgenlauf;Lauf;3360;3360;10,0;156;174;120;600;Nike Vomero;Run-1001.gpx',
+    ].join('\n'),
+  );
+  const germanMap = mapColumns(germanHeaders);
+  check('tyske kolonnenavne giver alle felter', germanMap.unmatched, (v) => v.length === 0);
+  check('tysk distance-felt parses', germanMap.index.has('distance'), (v) => v === true);
+  check('tysk gennemsnitlig puls parses', germanMap.index.has('avgHr'), (v) => v === true);
 
   // 3) Stravas FIT-filer har hvert felt i sin egen beseg: distance, puls
   //    og højde står i hver deres post med samme tidspunkt. Uden
@@ -521,7 +592,7 @@ try {
     generatedAt: new Date('2026-10-13T08:00:00'),
     poolLabel: 'Løb',
   });
-  check('baseline tæller hele vinduet', wide.includes('3 løb'), (v) => v === true);
+  check('baseline tæller hele vinduet', wide.includes('3 runs'), (v) => v === true);
 
   // 6) Pace-rundingen må ikke give 5:60
   check('pace 359,6 sek vises 6:00', fmtPace(359.6), (v) => v === '6:00/km');
@@ -553,7 +624,7 @@ try {
   });
 
   check('agent: har SCHEMA', agentOut.includes('## SCHEMA'), (v) => v === true);
-  check('agent: har SIGNALS med tærskler', agentOut.includes('> 5 = aerob kapacitet presset'), (v) => v === true);
+  check('agent: har SIGNALS med tærskler', agentOut.includes('> 5 = aerobic capacity under pressure'), (v) => v === true);
   check('agent: én linje pr. løb', (agentOut.match(/^d=\d{4}-/gm) ?? []).length, (v) => v === 4);
   check('agent: nyeste løb først', agentOut.indexOf('2026-10-16T18') < agentOut.indexOf('2026-10-14'), (v) => v === true);
   check('agent: har WEEKS', agentOut.includes('## WEEKS'), (v) => v === true);

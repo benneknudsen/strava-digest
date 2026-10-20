@@ -1,62 +1,67 @@
 # AGENTS.md
 
-Instruktioner til AI-agenter der arbejder med dette repo.
+Instructions for AI agents working in this repository.
 
-## Hvad dette værktøj er
+## What this tool is
 
-`strava-digest` læser brugerens **egen Strava bulk-eksport** og skriver en
-kompakt, maskinlæsbar digest. Formålet er at give en agent hele
-træningshistorikken for ~12.000 tokens i stedet for ~28 MB rå GPS-data.
+`strava-digest` reads the user's **own Strava bulk export** and writes a
+compact, machine-readable digest. The point is to give an agent the whole
+training history for ~14,900 tokens instead of ~28 MB of raw GPS data.
 
-**Rør aldrig Strava-API'et.** Værktøjet læser kun filer, brugeren selv har
-downloadet. Det er en eksport- og fortolkningsting, ikke et API-klient.
+**Never touch the Strava API.** The tool only reads files the user has
+downloaded themselves. It is an export-and-interpret thing, not an API client.
 
-## Sådan bruges det
+## How to use it
 
 ```bash
-strava-digest --find              # find eksporten: én sti pr. linje
-strava-digest <sti>               # digest til stdout
-strava-digest <sti> --out FIL    # digest til fil
-strava-digest <sti> --format md  # menneskelæsbar Markdown
+strava-digest --find              # find the export: one path per line
+strava-digest <path>              # digest to stdout
+strava-digest <path> --out FIL    # digest to a file
+strava-digest <path> --format md  # human-readable Markdown
 ```
 
-Standard-outputtet er agent-format. Læs `SCHEMA` og `SIGNALS` sektionerne
-før du fortolker felterne — de forklarer, hvad hvert tal betyder.
+The default output is the agent format. Read the `SCHEMA` and `SIGNALS`
+sections before interpreting the fields — they explain what every number
+means.
 
-## Regler for agenter
+## Rules for agents
 
-- **Læs `SCHEMA` og `SIGNALS` før du fortolker.** `drift` er HR-drift i
-  procent, `load` er træningsbelastning, `z` er zonefordelingen.
-- **Giv aldrig rådata til modellen.** Digesten er hele pointen.
-- **Find ikke på opdigtede tal.** Mangler et felt, står der `-`.
-- **Max-puls kommer fra brugeren.** Stravas eksport har ingen zonekonfiguration;
-  gæt ikke en værdi. Kør med `--max-hr <værdi>` når brugeren har oplyst den.
-- **`context.md` er brugerens.** Den flettes ind i digesten og er gitignored,
-  fordi indholdtet er personligt. Skriv ikke i den.
-- **`media/` er ikke data.** Det er billeder og videoer fra aktiviteterne,
-  inde i eksporten. Værktøjet springer dem over med vilje.
+- **Read `SCHEMA` and `SIGNALS` before interpreting.** `drift` is HR drift in
+  percent, `load` is training load, `z` is the zone split.
+- **Never hand the raw data to the model.** The digest is the whole point.
+- **Never invent numbers.** A missing field shows as `-`.
+- **Max heart rate comes from the user.** Strava's export has no zone
+  configuration; do not guess a value. Run with `--max-hr <value>` once the
+  user has given one.
+- **`context.md` belongs to the user.** It is embedded in the digest and is
+  gitignored, because the content is personal. Do not write to it.
+- **`media/` is not data.** It is the images and videos from the activities,
+  inside the export. The tool skips them on purpose.
+- **The output is English.** The tool reads Danish and English exports, but
+  its own output is English so that any agent can read it.
 
 ## Gate
 
-Før du committer:
+Before you commit:
 
 ```bash
 npm test          # scripts/smoke-test.mjs
 npx tsc --noEmit  # typecheck
 ```
 
-Begge skal være grønne. CI kører desuden på Linux, macOS og Windows med
-Node 22 og 24 — en ny test skal derfor ikke antage Unix-stier eller
-`/`-adskilte stier.
+Both must be green. CI also runs on Linux, macOS and Windows with Node 22 and
+24 — so a new test must not assume Unix paths or `/`-separated paths.
 
-## Struktur
+## Structure
 
-- `src/cli.ts` — argumenter, output, kommandoer
-- `src/agent.ts` — agent-formatet (én linje pr. løb)
-- `src/digest.ts` — Markdown-formatet
-- `src/interactive.ts` — den interaktive vælger og `--find`
-- `src/analysis.ts` — splits, drift, zoner, belastning
-- `src/loose.ts` — løse aktivitetsfiler
-- `src/strava.ts` — CSV-læsning og kolonnemapping
-- `scripts/smoke-test.mjs` — hele testen
-- `skills/strava-digest/SKILL.md` — færdig agent-skill, klar til at kopiere
+- `src/cli.ts` — arguments, output, commands
+- `src/agent.ts` — the agent format (one line per run)
+- `src/digest.ts` — the Markdown format
+- `src/interactive.ts` — the interactive picker and `--find`
+- `src/install.ts` — `--install-skill`
+- `src/analysis.ts` — splits, drift, zones, load
+- `src/columns.ts` — the column alias table (one place per language)
+- `src/loose.ts` — loose activity files
+- `src/strava.ts` — CSV reading and column mapping
+- `scripts/smoke-test.mjs` — the whole test suite
+- `skills/strava-digest/SKILL.md` — the ready-to-install agent skill

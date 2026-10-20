@@ -25,7 +25,7 @@ export async function openSource(path: string): Promise<ExportSource> {
 function openZip(path: string): Promise<ExportSource> {
   return new Promise((resolve, reject) => {
     yauzl.open(path, { lazyEntries: true, autoClose: false }, (err, zf) => {
-      if (err || !zf) return reject(err ?? new Error(`kunne ikke åbne ${path}`));
+      if (err || !zf) return reject(err ?? new Error(`could not open ${path}`));
       const entries = new Map<string, yauzl.Entry>();
 
       zf.on('error', reject);
@@ -56,7 +56,7 @@ function readZipEntry(
   if (!entry) return Promise.reject(new Error(`findes ikke i arkivet: ${name}`));
   return new Promise((resolve, reject) => {
     zf.openReadStream(entry, (err, stream) => {
-      if (err || !stream) return reject(err ?? new Error(`kunne ikke læse ${name}`));
+      if (err || !stream) return reject(err ?? new Error(`could not read ${name}`));
       const chunks: Buffer[] = [];
       stream.on('data', (c: Buffer) => chunks.push(c));
       stream.on('error', reject);

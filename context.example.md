@@ -1,11 +1,11 @@
-# Kontekst til digesten (valgfri)
+# Context for the digest (optional)
 
-Skriv kort hvad ugen skulle indeholde, og hvordan du har det. Digesten flettes
-ind i agentens læsning, så den kan vurdere om et pas blev udført som tiltænkt
-i stedet for bare at gentage dine tal.
+Write briefly what the week was supposed to contain, and how you are doing.
+The digest embeds this, so the agent can judge whether a session was completed
+as intended instead of just repeating your numbers.
 
-Eksempel:
+Example:
 
-- Planen: 1 tempo (6 km @ 4:20/km), 1 lang tur (10 km roligt), 2 rolige ture.
-- Status: sovet 6,5 t de sidste to nætter, let øm i venstre læg.
-- Formål med ugen: bygge volumen, ikke jagte pace.
+- Plan: 1 tempo (6 km @ 4:20/km), 1 long easy run (10 km), 2 easy runs.
+- Status: slept 6.5 h the last two nights, slightly sore in the left calf.
+- Goal for the block: build volume, not chase pace.

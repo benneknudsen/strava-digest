@@ -7,97 +7,114 @@ license: MIT
 
 # Strava digest
 
-Svar på træningsspørgsmål ud fra brugerens løbdata, læst via `strava-digest`.
+Answer questions about training from the user's run data, read via `strava-digest`.
 
 ## When to Use
 
-Brug denne skill når brugeren spørger om:
+Use this skill when the user asks about:
 
-- sine løb, sin træning, sin kondition eller sit løbhistorik
-- et konkret løb (pace, puls, zoner, splits, hvordan det gik)
-- tendenser over tid (volumen, belastning, form, pauser mellem løb)
-- hvilken træning der passer til planen, eller om et pas levede op til planen
-- en træningsplan der skal sammenlignes med det faktiske løbhistorik
+- their runs, training, fitness or running history
+- a specific run (pace, heart rate, zones, splits, how it went)
+- trends over time (volume, load, form, gaps between runs)
+- which training fits the plan, or whether a session matched the plan
+- a training plan to compare against the actual running history
 
-Brug den **ikke** når spørgsmålet ikke kræver brugerens data — generelle
-træningsråd, løbeting i andre lande, opsætning af et ur.
+Do **not** use it when the question does not need the user's data — general
+training advice, running abroad, watch setup.
 
-## Værktøjet
+## The tool
 
-`strava-digest` er et lokalt Node CLI der læser brugerens **egen Strava
-bulk-eksport** og skriver en kompakt digest. Det rører aldrig Strava-API'et,
-pakker aldrig noget ud til disk, og læser aldrig `media/` (billeder/videoer
-inde i eksporten).
+`strava-digest` is a local Node CLI that reads the user's **own Strava bulk
+export** and writes a compact digest. It never touches the Strava API, never
+unpacks anything to disk, and never reads `media/` (the photos and videos
+inside the export).
 
-Find kommandoen:
+Find the command:
 
 ```bash
-strava-digest --help   # hvis den er installeret globalt
-node <path-til-repo>/src/cli.ts --help
+strava-digest --help   # if it is installed globally
+node <path-to-repo>/src/cli.ts --help
 ```
 
-## Trin 1: find eksporten
+## Step 1: find the export
 
 ```bash
 strava-digest --find
 ```
 
-Printer én sti pr. linje, fuld eksport først. Exit-kode 0 = fund, 1 = ingen.
-Scanner arbejdsmappen, `~/Downloads` og `~/Desktop`.
+Prints one path per line, full export first. Exit code 0 = found, 1 = not
+found. Scans the working folder, `~/Downloads` and `~/Desktop`.
 
-Hvis intet findes: bed brugeren hente eksporten fra **Strava → Settings →
-My Account → Download or Delete Your Account**, lægge zip'en i `~/Downloads`
-og køre `strava-digest --find` igen. Strava kvarantines genbestillinger i omkring
-en uge, så bed om én bestilling og vent i stedet for at anmode igen.
+If nothing is found: ask the user to get the export from **Strava → Settings
+→ My Account → Download or Delete Your Account**, put the zip in
+`~/Downloads`, and run `strava-digest --find` again. Strava quarantines
+repeat requests for about a week, so ask for one request and wait rather than
+ordering again.
 
-## Trin 2: lav digesten
+## Step 2: build the digest
 
 ```bash
-strava-digest <sti-til-zip>
+strava-digest <path-to-zip>
 ```
 
-Standard-outputtet er **agent-format**: én maskinlæsbar linje pr. løb med alle
-felter, plus `SCHEMA`, `SIGNALS`, `WEEKS`, `WINDOW` og `STATS`. Alle løb i
-eksporten er med — en coach-agent kan ikke finde tendenser i et udvalg.
+The default output is the **agent format**: one machine-readable line per run
+with every field, plus `SCHEMA`, `SIGNALS`, `WEEKS`, `WINDOW` and `STATS`.
+Every run in the export is included — a coaching agent cannot find trends in
+a sample.
 
-Brug `--out FIL` hvis du vil læse filen bagefter i stedet for i stdout.
+Per-km splits (pace and average heart rate) are included for every run by
+default. On a 196-run export the whole digest is ~14,900 tokens against
+~28 MB of raw data.
 
-**Læs `SCHEMA` og `SIGNALS` før du fortolker.** `drift` er pace-normaliseret
-HR-drift i procent (>5 = aerob kapacitet presset), `load` er træningsbelastning
-= sum(min i zone × 1..5), `half` er negativ når den 2. halvdel var hurtigere,
-`z` er procentfordelingen i de fem zoner.
+The output is English. The tool reads exports in the account language
+(English, Danish, German, Swedish/Norwegian, Dutch, French, Spanish).
 
-## Trin 3: konteksten
+Use `--out FIL` if you want to read the file later instead of from stdout.
 
-`context.md` i det mappe værktøjet køres fra indeholder brugerens egen plan
-(ugens træning, søvn, krop, formål). Den flettes automatisk ind i hver digest.
-Læs den som **kontekst, ikke data** — den forteller hvad turen *skulle* være, så
-du kan vurdere den mod intentionen i stedet for bare at beskrive den.
+**Read `SCHEMA` and `SIGNALS` before interpreting anything.** `drift` is
+pace-normalised aerobic decoupling in percent (> 5 = aerobic capacity under
+pressure), `load` is training load = sum(minutes in zone × 1..5), `half` is
+negative when the second half was faster, `z` is the percent of time in each
+of the five zones.
 
-Brugeren kan kopiere `context.example.md` som startpunkt.
+## Step 3: the context
 
-## Max-puls og zoner
+`context.md` in the folder you run the tool from holds the user's own plan
+(the week's training, sleep, body, intent). It is embedded in every digest.
+Read it as **context, not data** — it says what the run was *supposed* to
+be, so you can judge it against the intent instead of only describing it.
 
-Stravas bulk-eksport indeholder **ikke** urets egen zonekonfiguration. Uden
-`--max-hr` er `max_hr=- source=-` i headeren, og zonefeltet er tomt.
+Users can start from `context.example.md`.
 
-Spørg brugeren efter deres max-puls, og kør med `--max-hr <værdi>` når zoner
-skal bruges. Gæt ikke — en forkert max-puls mærker alle zoner forkert, og så
-reasoner agenten sikkert på noget forkert.
+## Max heart rate and zones
 
-## Fejl der er værd at kende
+Strava's bulk export does **not** contain the watch's own zone configuration.
+Without `--max-hr` the header shows `max_hr=- source=-` and the zone field is
+empty.
 
-- `Ingen løb fundet i eksporten` → typen kan være oversat til brugerens sprog
-  ("Løb" i stedet for "Run"), eller det kan være andre aktivitetstyper — `--all`
-  hjælper.
-- En løb-række med `err=` betyder at filen ikke kunne læses. Resten af digesten
-  er stadig gyldig.
-- `z=-` betyder manglende zonekonfiguration — ikke at turen var uden puls.
+Ask the user for their max HR and run with `--max-hr <value>` when zones
+matter. Never guess — a wrong max HR mislabels every zone, and the agent
+then reasons confidently on something wrong.
 
-## Hvad du ikke skal gøre
+The highest heart rate observed in the export is a reasonable starting point
+if the user has nothing else, but say that it is observed rather than taken
+from the watch.
 
-- **Giv ikke rådata til modellen.** Digesten er hele pointen: en eksport med
-  196 løb er ~11.800 tokens mod ~28 MB rådata.
-- **Find ikke på opdigtede tal.** Mangler et felt, står der `-`. Siger
-  agenten "ingen data", skal du sige det, ikke gætte.
-- **Redigér ikke i `context.md` for brugeren.** Den er deres egen kontekst.
+## Errors worth knowing
+
+- `No runs found in the export (try --all)` → the activity type may be
+  translated to the account language ("Løb" instead of "Run", "Lauf",
+  "Löp"), or it may be other activity types — `--all` helps. The tool prints
+  the unmapped column names when it cannot place a column, so a new alias is
+  one line in `src/columns.ts`.
+- A run line containing `err=` means that file could not be read. The rest of
+  the digest is still valid.
+- `z=-` means missing zone configuration, not that the run had no heart rate.
+
+## What not to do
+
+- **Never hand the raw data to the model.** The digest is the whole point: a
+  196-run export is ~14,900 tokens against ~28 MB of raw data.
+- **Never invent numbers.** A missing field shows as `-`. If you say there is
+  no data, say so — do not guess.
+- **Do not edit the user's `context.md`.** It is their own context.

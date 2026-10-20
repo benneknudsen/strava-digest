@@ -38,12 +38,12 @@ export interface DigestInput {
 }
 
 const num = (v: number | null | undefined, digits = 0, fallback = '–'): string =>
-  v == null || !Number.isFinite(v) ? fallback : v.toFixed(digits).replace('.', ',');
+  v == null || !Number.isFinite(v) ? fallback : v.toFixed(digits);
 
-/** Dansk procent: komma som decimalseparator, ingen decimaler når tallet er helt. */
+/** Percent: dot as decimal separator, no decimals when the number is whole. */
 const fmtPct = (v: number): string => {
-  const s = v.toFixed(1).replace('.', ',');
-  return s.endsWith(',0') ? s.slice(0, -2) : s;
+  const s = v.toFixed(1);
+  return s.endsWith('.0') ? s.slice(0, -2) : s;
 };
 
 const zoneLine = (pcts: number[]): string =>
@@ -86,31 +86,31 @@ export function renderMarkdown(input: DigestInput): string {
   const stats = windowStats(baselinePool.map((r) => r.row), baselineDays, base);
   const out: string[] = [];
 
-  out.push(`# Træningsdigest — ${iso(input.generatedAt)}`);
+  out.push(`# Training digest — ${iso(input.generatedAt)}`);
   out.push('');
   out.push(
-    `Kilde: ${input.sourceLabel} · ${input.activitiesInExport} aktiviteter i eksporten · ${runs.length} løb i digesten`,
+    `Source: ${input.sourceLabel} · ${input.activitiesInExport} activities in export · ${runs.length} runs in digest`,
   );
   out.push('');
 
-  out.push(`## Baseline (${baselineDays} dage før seneste tur)`);
+  out.push(`## Baseline (${baselineDays} days before the most recent run)`);
   if (stats.count === 0) {
-    out.push('- ingen løb i vinduet');
+    out.push('- no runs in the window');
   } else {
     out.push(
-      `- ${num(stats.distanceKm, 1)} km fordelt på ${stats.count} løb (~${num(stats.runsPerWeek, 1)}/uge) · længste ${num(stats.longestKm, 1)} km`,
+      `- ${num(stats.distanceKm, 1)} km across ${stats.count} runs (~${num(stats.runsPerWeek, 1)}/week) · longest ${num(stats.longestKm, 1)} km`,
     );
-    out.push(`- gennemsnit: ${fmtPace(stats.avgPaceSecPerKm)} · puls ${num(stats.avgHr, 0)}`);
+    out.push(`- average: ${fmtPace(stats.avgPaceSecPerKm)} · heart rate ${num(stats.avgHr, 0)}`);
     const zoneSums = windowZoneSeconds(baselinePool, base, baselineDays);
     if (zoneSums) {
       const pcts = zonePcts(zoneSums);
-      const roligt = (pcts[0] ?? 0) + (pcts[1] ?? 0);
-      out.push(`- zoner: ${zoneLine(pcts)} · roligt (Z1–Z2) ${fmtPct(roligt)} %`);
+      const easy = (pcts[0] ?? 0) + (pcts[1] ?? 0);
+      out.push(`- zones: ${zoneLine(pcts)} · easy (Z1–Z2) ${fmtPct(easy)} %`);
     }
   }
   out.push('');
 
-  out.push(`## ${input.poolLabel} (${runs.length}, nyeste først)`);
+  out.push(`## ${input.poolLabel} (${runs.length}, newest first)`);
   runs.forEach((run, i) => {
     out.push('');
     out.push(...renderRun(run, i + 1, input.zoneHint));
@@ -118,20 +118,20 @@ export function renderMarkdown(input: DigestInput): string {
 
   if (input.contextText.trim()) {
     out.push('');
-    out.push('## Kontekst (fra dig)');
+    out.push('## Context (from you)');
     out.push(input.contextText.trim());
   }
 
   const notes: string[] = [];
   if (input.unmatchedHeaders.length) {
     notes.push(
-      `Kolonner uden mapping: ${input.unmatchedHeaders.slice(0, 12).join(' · ')}${input.unmatchedHeaders.length > 12 ? ' …' : ''}`,
+      `Unmapped columns: ${input.unmatchedHeaders.slice(0, 12).join(' · ')}${input.unmatchedHeaders.length > 12 ? ' …' : ''}`,
     );
   }
   if (input.hostNote) notes.push(input.hostNote);
   if (notes.length) {
     out.push('');
-    out.push('## Noter');
+    out.push('## Notes');
     notes.forEach((n) => out.push(`- ${n}`));
   }
   return `${out.join('\n')}\n`;
@@ -169,11 +169,11 @@ function renderRun(run: DigestedRun, index: number, zoneHint?: string): string[]
   const avgHr = row.avgHr ?? analysis?.avgHr ?? null;
   const maxHr = row.maxHr ?? analysis?.maxHr ?? null;
   lines.push(
-    `- **Pas:** ${fmtKm(distanceM)} · ${fmtDuration(movingSec)} · **${fmtPace(avgPace)}** · puls ${num(avgHr, 0)}/${num(maxHr, 0)}${analysis?.avgCadence != null ? ` · kadence ${num(analysis.avgCadence)}` : ''}`,
+    `- **Run:** ${fmtKm(distanceM)} · ${fmtDuration(movingSec)} · **${fmtPace(avgPace)}** · HR ${num(avgHr, 0)}/${num(maxHr, 0)}${analysis?.avgCadence != null ? ` · cadence ${num(analysis.avgCadence)}` : ''}`,
   );
   if (analysis) {
     const extras: string[] = [];
-    if (analysis.elevGainM > 5) extras.push(`${num(analysis.elevGainM)} m stigning`);
+    if (analysis.elevGainM > 5) extras.push(`${num(analysis.elevGainM)} m elevation`);
     if (row.relativeEffort != null) extras.push(`RE ${num(row.relativeEffort)}`);
     if (row.gear) extras.push(row.gear);
     if (extras.length) lines.push(`- **Metadata:** ${extras.join(' · ')}`);
@@ -185,49 +185,49 @@ function renderRun(run: DigestedRun, index: number, zoneHint?: string): string[]
           `${s.km}) ${fmtPace(s.paceSecPerKm).replace('/km', '')}${s.avgHr ? `/${Math.round(s.avgHr)}` : ''}${s.partial ? '*' : ''}`,
       )
       .join(' · ');
-    lines.push(`- **Splits (pace/puls):** ${splits}`);
+    lines.push(`- **Splits (pace/HR):** ${splits}`);
   }
   if (analysis) {
     const signals: string[] = [];
     if (analysis.hrDriftPct != null) {
       const verdict =
         analysis.hrDriftPct > 8
-          ? 'for høj — aerob kapacitet presset'
+          ? 'too high — aerobic capacity under pressure'
           : analysis.hrDriftPct > 5
-            ? 'let forhøjet'
-            : 'stabil';
+            ? 'slightly elevated'
+            : 'stable';
       signals.push(`HR-drift ${num(analysis.hrDriftPct, 1)} % (${verdict})`);
     }
     if (analysis.secondHalfPaceDeltaSec != null) {
       signals.push(
-        `2. halvdel ${fmtDelta(analysis.secondHalfPaceDeltaSec)}${analysis.secondHalfPaceDeltaSec < 0 ? ' (negativ split)' : ''}`,
+        `2nd half ${fmtDelta(analysis.secondHalfPaceDeltaSec)}${analysis.secondHalfPaceDeltaSec < 0 ? ' (negative split)' : ''}`,
       );
     }
     if (analysis.pauseCount) {
-      signals.push(`${analysis.pauseCount} pause${analysis.pauseCount > 1 ? 'r' : ''} (${fmtDuration(analysis.pauseSec)})`);
+      signals.push(`${analysis.pauseCount} pause${analysis.pauseCount > 1 ? 's' : ''} (${fmtDuration(analysis.pauseSec)})`);
     }
-    if (analysis.paceCvPct != null) signals.push(`pace-jævnhed CV ${num(analysis.paceCvPct, 1)} %`);
-    if (signals.length) lines.push(`- **Signaler:** ${signals.join(' · ')}`);
+    if (analysis.paceCvPct != null) signals.push(`pace consistency CV ${num(analysis.paceCvPct, 1)} %`);
+    if (signals.length) lines.push(`- **Signals:** ${signals.join(' · ')}`);
     if (analysis.zonePct && analysis.zoneMaxHr != null) {
-      const source = analysis.zoneSource === 'fit' ? 'fra uret' : 'fra --max-hr';
+      const source = analysis.zoneSource === 'fit' ? 'from the watch' : 'from --max-hr';
       lines.push(
-        `- **Zoner:** ${zoneLine(analysis.zonePct)} (max-puls ${num(analysis.zoneMaxHr)}, ${source})`,
+        `- **Zones:** ${zoneLine(analysis.zonePct)} (max HR ${num(analysis.zoneMaxHr)}, ${source})`,
       );
     } else if (analysis.zoneConfigured) {
-      lines.push('- _note: ingen zonefordeling (turen har ingen pulsdata)_');
+      lines.push('- _note: no zone split (this run has no heart-rate data)_');
     } else {
       lines.push(
-        `- _note: ingen zonefordeling (ingen max-puls${zoneHint ? ` — ${zoneHint}` : ' — sæt --max-hr'})_`,
+        `- _note: no zone split (no max HR${zoneHint ? ` — ${zoneHint}` : ' — set --max-hr'})_`,
       );
     }
     // Noten siger kun noget, når vi faktisk bruger den GPS-udledte distance.
     // Når CSV'en har totalen, bruger vi den (den afviger 0 % mod Strava).
     const usingGpsDistance = analysis.distanceDerived && !(row.distanceM != null && row.distanceM > 0);
     if (usingGpsDistance) {
-      lines.push('- _note: distance udledt af GPS (filen bærer ingen distance — tallet er en tilnærmelse)_');
+      lines.push('- _note: distance derived from GPS (the file carries no distance — the figure is an approximation)_');
     }
   } else if (run.error) {
-    lines.push(`- _intra-tur-detaljer utilgængelige: ${run.error}_`);
+    lines.push(`- _per-run details unavailable: ${run.error}_`);
   }
   return lines;
 }

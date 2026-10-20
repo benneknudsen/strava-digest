@@ -151,31 +151,31 @@ export async function pickSource(): Promise<string | null> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       printCandidates(candidates);
-      const answer = (await rl.question('Vælg nummer (eller indsæt en sti, q = afslut): ')).trim();
+      const answer = (await rl.question('Pick a number (or paste a path, q = quit): ')).trim();
       if (!answer || answer.toLowerCase() === 'q') return null;
       if (/^\d+$/.test(answer)) {
         const candidate = candidates[Number(answer) - 1];
         if (candidate) return candidate.path;
-        console.log(`Ugyldigt nummer: ${answer}`);
+        console.log(`Not a valid number: ${answer}`);
         continue;
       }
       const path = cleanPath(answer);
       if (await stat(path).catch(() => null)) return path;
-      console.log(`Kunne ikke læse stien: ${path}`);
+      console.log(`Could not read the path: ${path}`);
     }
   } finally {
     rl.close();
   }
-  throw new Error('ugyldigt input tre gange i træk — kør kommandoen igen og vælg et nummer fra listen');
+  throw new Error('invalid input three times in a row — run the command again and pick a number from the list');
 }
 
 function printCandidates(candidates: Candidate[]): void {
   if (!candidates.length) {
-    console.log('Ingen kandidater fundet i arbejdsmappen, ~/Downloads eller ~/Desktop.');
+    console.log('No candidates found in the working folder, ~/Downloads or ~/Desktop.');
     return;
   }
   candidates.forEach((c, i) => {
-    console.log(`${i + 1})  ${c.kind} · ${c.count} ${c.count === 1 ? 'fil' : 'filer'} · ${c.path}`);
+    console.log(`${i + 1})  ${c.kind} · ${c.count} ${c.count === 1 ? 'file' : 'files'} · ${c.path}`);
   });
 }
 

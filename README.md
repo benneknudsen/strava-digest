@@ -1,374 +1,455 @@
 # strava-digest
 
-Lokal CLI der laver ét kompakt træningsdigest af Stravas bulk-eksport eller af løse aktivitetsfiler. Digesten er bygget til at blive læst af en agent — splits, HR-drift, pace-jævnhed, zoner, træningsbelastning og tendenser — i stedet for at fodre den med megabyte GPS-punkter.
+A local CLI that turns a Strava bulk export — or loose activity files — into
+one compact training digest. The digest is built to be read by an agent:
+splits, HR drift, pace consistency, zones, training load and trends — instead
+of feeding it megabytes of GPS points.
 
-- **Bulk:** zip-filen eller mappen med `activities.csv`.
-- **Løse filer:** en enkelt aktivitetsfil (`.fit`, `.gpx` eller `.tcx`, også `.gz`) eller en mappe med dem.
+- **Bulk:** the zip file, or the folder containing `activities.csv`.
+- **Loose files:** a single activity file (`.fit`, `.gpx` or `.tcx`, also
+  `.gz`) or a folder with them.
 
-Zippen læses streamende: intet pakkes ud til disk, og `.fit.gz` gunzippes i hukommelsen.
+The zip is read as a stream: nothing is unpacked to disk, and `.fit.gz` is
+gunzipped in memory.
 
-> **`media/`** i en Strava-eksport er en mappe med billeder og videoer af
-> aktiviteterne. Den er en del af *eksporten*, ikke af din maskine, og
-> værktøjet springer den over med vilje — billeder er ikke træningsdata.
+> **`media/`** in a Strava export is a folder with photos and videos of the
+> activities. It is part of *the export*, not of your machine, and the tool
+> skips it on purpose — images are not training data.
 
-Standard-outputtet er et **agent-format**: én maskinlæsbar linje pr. løb med alle felter, en ugeoversigt, en statistik-sektion og en `SCHEMA`, der fortæller hvad hvert felt betyder. På en eksport med 196 løb er hele digesten ~11.800 tokens mod ~28 MB rådata.
+The default output is an **agent format**: one machine-readable line per run
+with every field, a week overview, a statistics section and a `SCHEMA` that
+explains what every field means. On an export with 196 runs the whole digest
+is ~14,900 tokens against ~28 MB of raw data.
 
-## Kom i gang
+## Getting started
 
-Terminal-CLI: ingen GUI, ingen server, ingen build-step. Kræver Node ≥ 22.18.
+Terminal CLI: no GUI, no server, no build step. Requires Node ≥ 22.18.
 
 ```bash
 git clone https://github.com/benneknudsen/strava-digest.git && cd strava-digest
 npm install
-npm link        # giver den globale strava-digest-kommando
+npm link        # gives you the global strava-digest command
 ```
 
-`npm link` er valgfrit. Uden det kan du køre værktøjet med `node src/cli.ts <sti>` — nyere Node-versioner kører TypeScript direkte, så der er ingen build-step.
+`npm link` is optional. Without it you can run the tool with
+`node src/cli.ts <path>` — recent Node versions run TypeScript directly, so
+there is no build step.
 
-### Få din eksport
+### Get your export
 
-Strava stiller bulk-eksporten til i din konto: **Settings → My Account → Download or Delete Your Account**. Der bestiller du den, og samme sted dukker download-linket op, når den er færdig. Linket i mailen er et tracking-link, der døer på serveren — gå tilbage til konto-siden i stedet for at koge ned på mailen.
+Strava makes the bulk export available in your account: **Settings → My
+Account → Download or Delete Your Account**. You order it there, and the same
+page shows the download link when it is ready. The link in the email is a
+tracking link that dies on the server — go back to the account page instead of
+boiling the email down.
 
-Strava kvarantine genbestillinger i cirka en uge, så det kan ikke ligge i at bestille igen med det samme.
+Strava quarantines repeat requests for about a week, so it cannot be too
+picky about ordering again.
 
-Læg zip'en i `~/Downloads` og kør:
+Put the zip in `~/Downloads` and run:
 
 ```bash
 strava-digest ~/Downloads/strava_export_12345678.zip
 ```
 
-### Interaktiv vælger
+### Interactive picker
 
-Kør uden argumenter i et rigtigt terminalvindue, og du får en vælger. Den scanner arbejdsmappen, `~/Downloads` og `~/Desktop` (mest nyligt ændrede først, maks 15):
+Run it without arguments in a real terminal window and you get a picker. It
+scans the working folder, `~/Downloads` and `~/Desktop` (most recently
+modified first, max 15):
 
 ```text
 $ strava-digest
-1)  aktivitetsmappe · 8 filer · ~/Downloads
-2)  zip · 4 filer · ~/Downloads/export_123456.zip
-3)  aktivitetsmappe · 4 filer · ~/Downloads/strava-filer
-4)  csv-mappe · 4 filer · ~/Downloads/export_123456
-Vælg nummer (eller indsæt en sti, q = afslut): q
+1)  activity folder · 8 files · ~/Downloads
+2)  zip · 4 files · ~/Downloads/export_123456.zip
+3)  activity folder · 4 files · ~/Downloads/strava-filer
+4)  csv folder · 4 files · ~/Downloads/export_123456
+Pick a number (or paste a path, q = quit): q
 ```
 
-`q` afslutter uden at gøre noget, og du kan indsætte eller trække en sti direkte ind. Uden for en terminal — og med `--help` — printes hjælpen i stedet. Har du stien, kan du springe vælgeren over:
+`q` quits without doing anything, and you can paste or drag a path straight in.
+Outside a terminal — and with `--help` — the help text is printed instead. If
+you already have the path, skip the picker:
 
 ```bash
 strava-digest ~/Downloads/export_123456.zip
 ```
 
-Afinstallation: `npm unlink -g strava-digest`. Pakken forbliver `private`; der publiseres intet til npm.
+Uninstall: `npm unlink -g strava-digest`. The package stays `private`;
+nothing is published to npm.
 
-På Windows: brug fuld sti eller `$HOME` i stedet for `~` i PowerShell, og sæt stien i citationstegn, hvis den indeholder mellemrum.
+On Windows: use a full path or `$HOME` instead of `~` in PowerShell, and quote
+the path if it contains spaces.
 
-### Flag
-
-```
---last N        antal løb i digesten (default: alle)
---detail N      antal nyeste løb der får fuld split-opdeling (default 10)
---all           tag alle aktivitetstyper med, ikke kun løb
---list          vis kun indekset af aktiviteter
---find          find mulige eksporter og print dem som stier (én pr. linje)
---out FIL       skriv til fil i stedet for stdout
---json          maskinlæsbar JSON i stedet for digest
---format md     menneskelæsbar Markdown i stedet for agent-format
---days N        sammenligningsvindue i dage (default 28)
---max-hr N      max-puls til zonefordeling (Z1–Z5 = 50–100 % af max)
---context FIL   kontekstfil der flettes ind (default ./context.md hvis den findes)
-```
-
-## Sådan fungerer det i praksis
-
-Hele vejen er tre ting: **en zip-fil** (din data), **et CLI** (laver en
-digest ud af den), **en agent** (læser digesten og svarer).
+### Flags
 
 ```
-  Strava-konto                  Din maskine                    Din agent
-  ────────────                  ───────────                    ─────────
-  Settings → Download           ~/Downloads/strava_export…zip
-       │                                │
-       │                                │  strava-digest --find
-       │                                │  strava-digest <zip>
-       │                                ▼
-       └──────────────────────▶  ~12.000 tokens digest
+--last N        number of runs in the digest (default: all)
+--detail N      only the newest N runs get per-km splits (default: all)
+--all           include all activity types, not just runs
+--list          show only the index of activities
+--find          find possible exports and print them as paths (one per line)
+--out FIL       write to a file instead of stdout
+--json          machine-readable JSON instead of the digest
+--format md     human-readable Markdown instead of the agent format
+--days N        comparison window in days (default 28)
+--max-hr N      max heart rate for the zone split (Z1–Z5 = 50–100 % of max)
+--context FIL   context file to embed (default ./context.md if it exists)
+```
+
+## How it works in practice
+
+The whole path is three things: **a zip file** (your data), **a CLI** (makes a
+digest out of it), **an agent** (reads the digest and answers).
+
+```
+  Strava account                Your machine                   Your agent
+  ─────────────                 ────────────                   ─────────
+  Settings → Download           ~/Downloads/strava_export….zip
+       │                               │
+       │                               │  strava-digest --find
+       │                               │  strava-digest <zip>
+       │                               ▼
+       └──────────────────────▶  ~14,900 token digest
                                         │
-                                        │  skriv din plan i context.md
+                                        │  write your plan in context.md
                                         ▼
-                                   "Hvordan var min uge?"
+                                   "How was my week?"
 ```
 
-Ingen server, ingen konto, ingen upload. Zippen bliver på din maskine, og
-kun *digesten* — altså tallene — når ud til agenten.
+No server, no account, no upload. The zip stays on your machine, and only
+*the digest* — that is, the numbers — reaches the agent.
 
-### Kom i gang som ny bruger
+### Getting started as a new user
 
 ```bash
 git clone https://github.com/benneknudsen/strava-digest.git
 cd strava-digest
 npm install
-npm link                    # gør `strava-digest` til en global kommando
+npm link                    # makes `strava-digest` a global command
 ```
 
-Bestil derefter din eksport i Strava (**Settings → My Account → Download or
-Delete Your Account**), læg zip'en i `~/Downloads`, og:
+Then order your export in Strava (**Settings → My Account → Download or
+Delete Your Account**), put the zip in `~/Downloads`, and:
 
 ```bash
-strava-digest --find               # → /Users/dig/Downloads/strava_export_….zip
+strava-digest --find               # → /Users/you/Downloads/strava_export_….zip
 strava-digest ~/Downloads/strava_export_….zip
 ```
 
-Uden `npm link` virker `node src/cli.ts <sti>` lige så godt — der er ingen
-build-step.
+Without `npm link`, `node src/cli.ts <path>` works just as well — there is no
+build step.
 
-### Giv agenten adgang
+### Give the agent access
 
-Det er her det bliver interessant. Der er tre niveauer, fra lettest til
-mest automatisk:
+This is where it gets interesting. There are three levels, from easiest to
+most automatic:
 
-**1. Skriv det i chatten.** Den enkleste form:
+**1. Paste it into the chat.** The simplest form:
 
 ```bash
 strava-digest ~/Downloads/strava_export_….zip --out ~/strava-digest.txt
 ```
 
-Åbn filen, kopier indholdet ind i din agent-chat, og spørg. Virker med enhver
-agent overalt. Ikke automatisk, men virker.
+Open the file, copy the contents into your agent chat, and ask. Works with any
+agent anywhere. Not automatic, but it works.
 
-**2. Sæt en skill op.** Én kommando installerer skillen i de agenter, der findes på maskinen:
+**2. Install a skill.** One command installs the skill into the agents that
+are actually present on the machine:
 
 ```bash
 strava-digest --install-skill
 ```
 
 ```
-strava-digest — skill installeret
+strava-digest — skill installed
 
-  installeret  Hermes  →  /Users/dig/.hermes/skills/strava-digest/SKILL.md
-  installeret  Claude Code  →  /Users/dig/.claude/skills/strava-digest/SKILL.md
-  ikke fundet  Cursor
-  ikke fundet  Codex
+  installed  Hermes  →  /Users/you/.hermes/skills/strava-digest/SKILL.md
+  installed  Claude Code  →  /Users/you/.claude/skills/strava-digest/SKILL.md
+  not found  Cursor
+  not found  Codex
 
-Genstart agenten, og spørg den om dine løb.
-Fx: "hvordan var min uge?" eller "hvad var min langseste tur?"
+Restart the agent, and ask it about your runs.
+E.g. "how was my week?" or "what was my longest run?"
 ```
 
-Kun agenter der faktisk er installeret, får en skill. En eksisterende skill opdateres der hvor den ligger — også hvis agenten har lagt den i en undermappe — så du ikke ender med to skills med samme navn. Din egen tilpasning sikkerhedskopieres til `SKILL.md.bak` før den overskrives.
+Only agents that are actually installed get a skill. An existing skill is
+updated where it lives — even if the agent put it in a subfolder — so you do
+not end up with two skills of the same name. Your own customisation is backed
+up to `SKILL.md.bak` before it is overwritten.
 
-Med en mappeangivelse installeres den et bestemt sted:
+With a folder argument it is installed in one specific place:
 
 ```bash
 strava-digest --install-skill ~/.hermes/skills
 ```
 
-Skillen ligger også i repoet som `skills/strava-digest/SKILL.md`, hvis du vil læse den eller kopiere den selv.
+The skill also lives in the repo as `skills/strava-digest/SKILL.md`, if you
+want to read it or copy it yourself.
 
-**3. Lad repoet læses automatisk.** `AGENTS.md` i repoet fortæller enhver agent
-der arbejder i mappen, hvad værktøjet gør og hvilke regler der gælder. Agenter
-som Claude Code, Codex, Cursor, Aider og OpenCode læser den automatisk. Den
-er nyttig hvis du *udvikler* på værktøjet — til privat brug er niveau 2
-bedre.
+**3. Let the repo be read automatically.** `AGENTS.md` in the repo tells any
+agent working in the folder what the tool does and which rules apply. Agents
+such as Claude Code, Codex, Cursor, Aider and OpenCode read it automatically.
+It is useful if you *develop* on the tool — for private use, level 2 is better.
 
-> Hvilken agent bruger du? De fleste kan læse en `SKILL.md` (niveau 2), og
-> enhver agent der kan køre en kommando kan få adgang uden skill overhovedet —
-> bed den bare køre `strava-digest --find` og `strava-digest <sti>`.
+> Which agent do you use? Most of them can read a `SKILL.md` (level 2), and
+> any agent that can run a command can get access without a skill at all —
+> just ask it to run `strava-digest --find` and `strava-digest <path>`.
 
-### Trin 1: find eksporten
+### The skill is not the data
 
-`--find` scanner de samme steder som den interaktive vælger og printer **én sti pr. linje** — ingen overskrifter, ingen nummerering. Det er lavet til scripting: en agent skal ikke parse en menneskelæsbar liste.
+This is the part that is easy to misunderstand, so it is worth being precise.
+
+```
+SKILL.md (4 KB)       = INSTRUCTIONS. Tells the agent to run the command.
+                        Loaded only when the topic is relevant. Holds NO data.
+
+strava-digest <zip>   = THE COMPRESSION. Runs locally; the agent never opens
+                        the zip. 28 MB of raw data → ~14,900 tokens.
+
+The digest (14.9 KB)  = What the agent actually reads.
+```
+
+The agent never sees the zip. It reads the skill (which says "run
+`strava-digest --find`, then `strava-digest <path>`") and the *result* —
+14,900 tokens holding all 196 runs with splits, zones and HR drift. Without
+the tool, the agent would have to read 28 MB of GPS points, which is millions
+of tokens.
+
+So the skill is not a replacement for the compression — it is the **binding**
+between the agent and the compression.
+
+### Step 1: find the export
+
+`--find` scans the same places as the interactive picker and prints **one path
+per line** — no headers, no numbering. It is built for scripting: an agent
+should not have to parse a human-readable list.
 
 ```bash
 strava-digest --find
-/Users/dig/Downloads/strava_export_12345678.zip
+/Users/you/Downloads/strava_export_12345678.zip
 ```
 
-Exit-kode 0 når der blev fundet noget, 1 når der ikke gjorde. Fuld eksport (zip eller mappe med `activities.csv`) står først.
+Exit code 0 when something was found, 1 when it was not. A full export (zip or
+folder with `activities.csv`) comes first.
 
-### Trin 2: lav digesten
+### Step 2: build the digest
 
 ```bash
-strava-digest /Users/dig/Downloads/strava_export_12345678.zip
+strava-digest /Users/you/Downloads/strava_export_12345678.zip
 ```
 
-Outputtet går til stdout. Med `--out FIL` skrives det til en fil i stedet, hvilket er handy når agenten skal læse det senere:
+The output goes to stdout. With `--out FIL` it is written to a file instead,
+which is handy when the agent should read it later:
 
 ```bash
 strava-digest ~/Downloads/strava_export_12345678.zip --out ~/strava-digest.txt
 ```
 
-### Trin 3: giv agenten konteksten
+### Step 3: give the agent the context
 
-Digesten forteller agenten, hvad du løb. Den forteller ikke, hvad du **ville**. Skriv det i `context.md` — plan, søvn, krop, formål med perioden — så agenten kan vurdere en tur mod intentionen i stedet for bare at beskrive den.
+The digest tells the agent what you ran. It does not tell it what you
+*meant*. Write that in `context.md` — plan, sleep, body, the purpose of the
+period — so the agent can judge a run against the intent instead of just
+describing it.
 
 ```markdown
-# Kontekst til digesten
+# Context for the digest
 
-Ugen: 12.–18. oktober 2026
-- Planen: 1 tempo (Z3) + 2 rolige (Z2)
-- Søvn: 6,5-7,5 timer, én dårlig nat
-- Formål: bygge volumen, ikke jagte pace
+Week: 12–18 October 2026
+- Plan: 1 tempo (Z3) + 2 easy (Z2)
+- Sleep: 6.5–7.5 hours, one good night
+- Purpose: build volume, not chase pace
 ```
 
-Kopier [`context.example.md`](context.example.md) som startpunkt. Filen hedder `context.md` i det mappe du kører værktøjet fra, eller du kan pege på en anden med `--context FIL`. Den flettes ind i hver digest. Den er gitignored, fordi indholdtet er personligt.
+Copy [`context.example.md`](context.example.md) as a starting point. The file
+is called `context.md` in the folder you run the tool from, or you can point
+at another one with `--context FIL`. It is embedded in every digest. It is
+gitignored, because the content is personal.
 
-### Sprog
+### Languages
 
-Strava oversætter eksporten til **kontosproget**, så det samme værktøj skal
-læse forskellige sprog. Dette er dækket:
+Strava translates the export to the **account language**, so the same tool has
+to read several languages. **The output is always English** — the CLI help and
+the Markdown digest — while the *input* is read in the language the export
+happens to be in.
 
-| Hvad | Dækket |
+| What | Covered |
 |---|---|
-| Kolonnenavne i `activities.csv` | engelsk + dansk (`aktivitet dato`, `gennemsnitlig puls`, `maks puls`, `bevægelsestid`, …) |
-| Månedsnavne i datoer | engelsk + dansk (`Oct 12, 2026` og `12. okt. 2026`) |
-| Dato-rækkefølge | dag-først (`12.10.2026`), måned-først (`10/12/2026`), ISO (`2026-10-12`) |
-| Aktivitetstyper | engelsk + dansk (`Run`, `Løb`), med `ø/æ/å`-normalisering |
-| 12-timers ur | `AM`/`PM` |
+| Column names in `activities.csv` | English, Danish, German, Swedish/Norwegian, Dutch, French, Spanish (`activity date`, `aktivitet dato`, `Aktivitätsdatum`, `datum`, `fecha de actividad`, …) |
+| Month names in dates | English, Danish, German, Swedish, Dutch, Norwegian, French, Spanish (`Oct 12, 2026`, `12. okt. 2026`, `12. März 2026`, `12 février 2026`, `12 de octubre de 2026`, …) |
+| Date order | day-first (`12.10.2026`), month-first (`10/12/2026`), ISO (`2026-10-12`) |
+| Activity types | English, Danish (`Run`, `Løb`), German (`Lauf`), Swedish/Norwegian (`Löp`, `Løp`, `Löpning`), Dutch (`Hardlopen`), French (`Course à pied`), Spanish (`Carrera`) |
+| 12-hour clock | `AM`/`PM` |
 
-**Output er på dansk** — CLI-hjælpen og Markdown-digesten. Det er den
-menneskelæsbare del. **Agent-formatet er sprogneutralt**: feltnavnene er
-`km`, `t`, `pace`, `hr`, `z`, `drift`, `load`, så en agent læser det på
-samme måde uanset sprog.
+Accents are folded, not deleted: `Löp` becomes `lop`, not `lp`. That
+distinction matters — a Swedish account whose activity type was silently
+stripped to `lp` would show **zero runs** with no error anywhere.
 
-Et tredje sprog (tysk, svensk, nederlandsk …) kræver, at et par aliaser
-lægges i `src/columns.ts` — de er alle i én tabel. Værktøjet siger det
-helt konkret, hvis en kolonne ikke genkendes: den printer den rigtige
-header-række, så et nyt alias er én linje.
+The **agent format is language-neutral**: the field names are `km`, `t`,
+`pace`, `hr`, `z`, `drift`, `load`, so an agent reads it the same way whatever
+the language.
 
-### Om MCP
+A language that is not covered yet needs a couple of aliases added in
+`src/columns.ts` — they are all in one table. The tool says so very
+concretely if a column is not recognised: it prints the actual header row, so
+a new alias is one line.
 
-Værktøjet er et CLI, så en MCP-server er en tynd indpakning — kald `strava-digest` som en tool og returnér stdout. Det er den vej, hvis din agent *kun* taler MCP.
+### About MCP
 
-## Hvad agenten får at læse
+The tool is a CLI, so an MCP server is a thin wrapper — call `strava-digest`
+as a tool and return stdout. That is the route if your agent *only* speaks
+MCP.
+
+## What the agent gets to read
 
 ```
-# STRAVA DIGEST v2 (agent-format)
+# STRAVA DIGEST v2 (agent format)
 runs_in_export=196
 max_hr=199 source=flag
 
-## WEEKS (nyeste først)
+## WEEKS (newest first)
 w=2026-W42 r=1 km=7.0 t=3076 load=48 hr=142
 
-## WINDOW (seneste 28 dage vs. de 28 dage før)
-seneste: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=442 z=0.0,0.0,52.0,42.0,6.0
-forrige: n=0 km=0.0 t=0 pace=- hr=- load=- z=-
+## WINDOW (last 28 days vs. the 28 days before)
+recent: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=442 z=0.0,0.0,52.0,42.0,6.0
+previous: n=0 km=0.0 t=0 pace=- hr=- load=- z=-
 
-## RUNS (196, nyeste først)
-d=2026-10-16T08:18:29.000Z n="Løb om morgenen" km=7.02 t=3076 pace=438.2 hr=142/159 z=3.1,31.0,66.0,0.0,0.0 elev=120 drift=5.7 half=-1.0 cv=2.0 pause=0 load=48 sp=1:421@127,2:435@141
+## RUNS (196, newest first)
+d=2026-10-16T08:18:29.000Z n="Morning run" km=7.02 t=3076 pace=438.2 hr=142/159 z=3.1,31.0,66.0,0.0,0.0 elev=120 drift=5.7 half=-1.0 cv=2.0 pause=0 load=48 sp=1:421@127,2:435@141
 ```
 
-Designreglerne:
+The design rules:
 
-- **Alt med.** Standarden er *alle* løb i eksporten, ikke et udvalg. En coach-agent kan ikke finde tendenser i fem ture. På en rigtig eksport med 196 løb er hele digesten ~11.800 tokens mod ~28 MB rådata.
-- **Selvbeskrivende.** Feltnavnene står i SCHEMA-sektionen én gang, og SIGNALS-sektionen siger hvad tærsklerne betyder. Agenten skal ikke gætte at `drift=5.7` er procent.
-- **Maskinlæsbart.** Decimaltegn er altid punktum, manglende værdier er `-`, og hver løb-række har præcis samme nøgler i samme rækkefølge.
-- **Afledte tal med.** Splits, HR-drift, zoner, negativ split, pace-jævnhed og træningsbelastning (`load` = sum(min i zone × 1..5)) er de felter kilden ikke har. Uden dem gentager agenten bare brugerens egne tal.
-- **Deterministisk.** Samme fil giver samme tal og samme digest bortset fra tidsstemplet i første linje, så agentens svar kan sammenlignes over uger.
+- **Everything.** The default is *all* runs in the export, not a selection. A
+  coaching agent cannot find trends in five runs. On a real export with 196
+  runs the whole digest is ~14,900 tokens against ~28 MB of raw data.
+- **Self-describing.** The field names appear in the SCHEMA section once, and
+  the SIGNALS section says what the thresholds mean. The agent should not
+  have to guess that `drift=5.7` is a percentage.
+- **Machine-readable.** The decimal separator is always a dot, missing values
+  are `-`, and every run line has exactly the same keys in the same order.
+- **Derived numbers included.** Splits, HR drift, zones, negative split, pace
+  consistency and training load (`load` = sum(min in zone × 1..5)) are the
+  fields the source does not have. Without them the agent just repeats the
+  user's own numbers.
+- **Deterministic.** The same file gives the same numbers and the same digest
+  apart from the timestamp in the first line, so the agent's answers can be
+  compared across weeks.
 
-`--detail N` styrer hvor mange af de nyeste løb der får fuld split-opdeling (default 10); resten får de øvrige felter. `--format md` giver det menneskelæsbare Markdown, hvis du vil læse det selv.
+`--detail N` controls how many of the newest runs get the full per-km split
+detail (default: all); the rest get the other fields. `--format md` gives the
+human-readable Markdown, if you want to read it yourself.
 
-## Eksempler
+## Examples
 
-Alle eksempler er kørt på de syntetiske testfiler; outputtet er kopieret fra kørslerne, men stierne er forkortet i forhold til den rå udskrift (fx til `~`). Værktøjet forkorter aldrig stien (fx til `~`); den interaktive vælger viser altid fulde, absolutte stier.
+All examples were run on the synthetic test files; the output is copied from
+the runs, but the paths are shortened compared to the raw printout (e.g. to
+`~`). The tool never shortens the path itself (e.g. to `~`); the interactive
+picker always shows full, absolute paths.
 
 ### Bulk: zip
 
 ```text
 $ strava-digest ~/Downloads/export_123456.zip --max-hr 190
-# STRAVA DIGEST v2 (agent-format)
+# STRAVA DIGEST v2 (agent format)
 generated=2026-10-20T17:13:36.482Z
-source=~/Downloads/export_123456.zip (zip, 6 filer)
+source=~/Downloads/export_123456.zip (zip, 6 files)
 activities_in_export=4
 runs_in_export=3
 runs_shown=3
-detail_runs=3 (nyeste, får split-opdeling)
+detail_runs=3 (newest, include per-km splits)
 max_hr=190 source=flag
 
 ## SCHEMA
-række-felter (én løb pr. linje, nyeste først):
-  d=ISO8601 tidspunkt (UTC) | n=navn | km=distance | t=bevægelsestid i sekunder
-  pace=sekunder pr. km | hr=gennemsnit/maks puls | z=Z1,Z2,Z3,Z4,Z5 i % af tid med puls
-  elev=højdemeter i m | drift=pace-normaliseret HR-drift i % (se SIGNALS)
-  half=2. halvdel minus 1. halvdel i s/km (negativ = negativ split)
-  cv=pace-jævnhed, variationskoefficient i % | pause=antal pauser
-  load=træningsbelastning, sum(min i zone * 1..5)
-  sp=per-km splits: <km>:<pace_s/km>@<puls>, * = ufuldstændig km
+row fields (one run per line, newest first):
+  d=ISO8601 timestamp (UTC) | n=name | km=distance | t=moving time in seconds
+  pace=seconds per km | hr=average/max heart rate | z=Z1,Z2,Z3,Z4,Z5 in % of time with HR
+  elev=elevation in m | drift=pace-normalised HR drift in % (see SIGNALS)
+  half=2nd half minus 1st half in s/km (negative = negative split)
+  cv=pace consistency, coefficient of variation in % | pause=number of pauses
+  load=training load, sum(min in zone * 1..5)
+  sp=per-km splits: <km>:<pace_s/km>@<hr>, * = partial km
 …
-## WEEKS (nyeste først)
+## WEEKS (newest first)
 w=2026-W42 r=1 km=10.0 t=3360 load=193 hr=156
 w=2026-W41 r=2 km=14.0 t=4325 load=249 hr=153
 
-## WINDOW (seneste 28 dage vs. de 28 dage før)
-seneste: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=442 z=0.0,0.0,52.0,42.0,6.0
-forrige: n=0 km=0.0 t=0 pace=- hr=- load=- z=-
+## WINDOW (last 28 days vs. the 28 days before)
+recent: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=442 z=0.0,0.0,52.0,42.0,6.0
+previous: n=0 km=0.0 t=0 pace=- hr=- load=- z=-
 
-## RUNS (3, nyeste først)
-d=2026-10-12T06:32:10.000Z n="Lang tur" km=10.00 t=3360 pace=336.0 hr=156/174 z=0.0,0.0,36.1,63.9,0.0 elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=193 sp=1:329@144,2:327@145,3:325@149,4:323@151,5:320@153,6:318@157,7:316@158,8:314@162,9:312@163,10*:309@167
+## RUNS (3, newest first)
+d=2026-10-12T06:32:10.000Z n="Long run" km=10.00 t=3360 pace=336.0 hr=156/174 z=0.0,0.0,36.1,63.9,0.0 elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=193 sp=1:329@144,2:327@145,3:325@149,4:323@151,5:320@153,6:318@157,7:316@158,8:314@162,9:312@163,10*:309@167
 d=2026-10-09T06:05:00.000Z n="Tempo" km=6.00 t=1580 pace=263.3 hr=168/181 z=0.0,0.0,0.0,71.3,28.7 elev=0 drift=3.9 half=-2.0 cv=0.4 pause=0 load=111 sp=1:262@160,2:261@161,3:260@166,4:260@168,5:259@172,6:258@174
-d=2026-10-07T07:15:00.000Z n="Rolig tur" km=8.00 t=2745 pace=343.1 hr=137/145 z=0.0,0.0,100.0,0.0,0.0 elev=0 drift=1.2 half=-1.5 cv=0.2 pause=0 load=137 sp=1:345@135,2:345@135,3:344@135,4:344@137,5:344@136,6:343@138,7:343@138,8*:343@138
+d=2026-10-07T07:15:00.000Z n="Easy run" km=8.00 t=2745 pace=343.1 hr=137/145 z=0.0,0.0,100.0,0.0,0.0 elev=0 drift=1.2 half=-1.5 cv=0.2 pause=0 load=137 sp=1:345@135,2:345@135,3:344@135,4:344@137,5:344@136,6:343@138,7:343@138,8*:343@138
 
-## STATS (hele perioden)
+## STATS (whole period)
 runs=3 km_total=24.0 median_km=8.00
-longest_run=10.00 km on 2026-10-12 (Lang tur)
+longest_run=10.00 km on 2026-10-12 (Long run)
 fastest_avg_pace=263.3 s/km on 2026-10-09 (Tempo)
-max_gap=2.0 dage (2026-10-09 -> 2026-10-12)
+max_gap=2.0 days (2026-10-09 -> 2026-10-12)
 …
 ```
 
-### Bulk: mappe med `activities.csv`
+### Bulk: folder with `activities.csv`
 
 ```text
 $ strava-digest ~/Downloads/export_123456 --max-hr 190
-# STRAVA DIGEST v2 (agent-format)
-source=~/Downloads/export_123456 (mappe, 6 filer)
+# STRAVA DIGEST v2 (agent format)
+source=~/Downloads/export_123456 (folder, 6 files)
 …
 ```
 
-Resten er identisk med zip-eksemplet ovenfor — kun Kilde-linjen er forskellig.
+The rest is identical to the zip example above — only the source line differs.
 
-### Løse filer: enkelt aktivitetsfil
+### Loose files: a single activity file
 
 ```text
 $ strava-digest ~/Downloads/strava-filer/Run-1001.gpx
-# STRAVA DIGEST v2 (agent-format)
-source=~/Downloads/strava-filer/Run-1001.gpx (fil) · metadata læst fra filen
+# STRAVA DIGEST v2 (agent format)
+source=~/Downloads/strava-filer/Run-1001.gpx (file) · metadata read from the file
 activities_in_export=1
 runs_in_export=1
 max_hr=- source=-
 
-## RUNS (1, nyeste først)
+## RUNS (1, newest first)
 d=2026-10-12T06:30:00.330Z n="Run-1001" km=9.99 t=3190 pace=319.4 hr=155/168 z=- elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=- sp=1:329@144,2:327@145,3:325@149,4:323@151,5:320@153,6:318@157,7:316@158,8:314@162,9:312@163,10*:309@167
 
 ## NOTES
-- Uden activities.csv findes eksportens navn ikke — navnet i digesten kommer fra filnavnet. Relative Effort, udstyr og kalorier er udeladt.
+- Without activities.csv the export's name is not found — the name in the digest comes from the filename. Relative Effort, gear and calories are omitted.
 ```
 
-### Løse filer: mappe
+### Loose files: folder
 
 ```text
 $ strava-digest ~/Downloads/strava-filer --max-hr 190
-# STRAVA DIGEST v2 (agent-format)
-source=~/Downloads/strava-filer (mappe, 4 aktivitetsfiler) · metadata læst fra filerne
+# STRAVA DIGEST v2 (agent format)
+source=~/Downloads/strava-filer (folder, 4 activity files) · metadata read from the files
 activities_in_export=4
 runs_in_export=3
 …
 
 ## NOTES
-- Uden activities.csv findes eksportens navn ikke — navnet i digesten kommer fra filnavnet. Relative Effort, udstyr og kalorier er udeladt. 1 fil sprunget over: UdenTid.gpx (ingen brugbar tid).
+- Without activities.csv the export's name is not found — the name in the digest comes from the filename. Relative Effort, gear and calories are omitted. 1 file skipped: NoTime.gpx (no usable time).
 ```
 
-(Outputtet er forkortet — kun Noter-sektionen er vist ud over toppen; per-løb-rækkerne er som ovenfor.)
+(The output is shortened — only the Notes section is shown beyond the top; the
+per-run lines are as above.)
 
 ### `--list`
 
 ```text
 $ strava-digest ~/Downloads/export_123456 --list
-2026-10-12  LØB  Run             Run-1001.gpx  zoner: nej
-2026-10-09  LØB  Run             Run-1002.tcx  zoner: nej
-2026-10-07  LØB  Run             Run-1003.gpx  zoner: nej
-2026-10-06       Ride            Ride-1004.fit.gz  zoner: nej
+2026-10-12  RUN  Run             Run-1001.gpx  zones: no
+2026-10-09  RUN  Run             Run-1002.tcx  zones: no
+2026-10-07  RUN  Run             Run-1003.gpx  zones: no
+2026-10-06       Ride            Ride-1004.fit.gz  zones: no
 
-4 aktiviteter i alt (vist: 4)
+4 activities in total (shown: 4)
 ```
 
-### `--max-hr` (zoner)
+### `--max-hr` (zones)
 
 ```text
 $ strava-digest ~/Downloads/strava-filer/Run-1001.gpx --max-hr 190
@@ -377,14 +458,17 @@ max_hr=190 source=flag
 d=2026-10-12T06:30:00.330Z n="Run-1001" km=9.99 t=3190 pace=319.4 hr=155/168 z=0.0,0.0,36.1,63.9,0.0 elev=0 drift=4.4 …
 ```
 
-Uden flaget er zonefeltet `-` (tomt), og `max_hr=- source=-` i headeren. Kommer grænserne fra urets FIT-fil, står der `source=fit` i stedet for `source=flag`. I Markdown-formatet står der `fra uret` i stedet for `fra --max-hr`.
+Without the flag the zone field is `-` (empty), and the header says
+`max_hr=- source=-`. If the boundaries come from the watch's own FIT file, the
+header says `source=fit` instead of `source=flag`. In the Markdown format it
+says `from the watch` instead of `from --max-hr`.
 
 ### `--json`
 
 ```text
 $ strava-digest ~/Downloads/strava-filer/Run-1001.gpx --last 1 --max-hr 190 --json
 {
-  "sourceLabel": "~/Downloads/strava-filer/Run-1001.gpx (fil) · metadata læst fra filen",
+  "sourceLabel": "~/Downloads/strava-filer/Run-1001.gpx (file) · metadata read from the file",
   "activitiesInExport": 1,
   "runs": [
     {
@@ -408,118 +492,199 @@ $ strava-digest ~/Downloads/strava-filer/Run-1001.gpx --last 1 --max-hr 190 --js
       …
 ```
 
-(Outputtet er forkortet: resten er `analysis`, baseline-felterne og hele `markdown`-feltet.)
+(The output is shortened: the rest is `analysis`, the baseline fields and the
+whole `markdown` field.)
 
 ### `--out`
 
 ```text
 $ strava-digest ~/Downloads/export_123456.zip --out runs/digest.txt
-skrev …/strava-digest/runs/digest.txt (N tegn)
+wrote …/strava-digest/runs/digest.txt (N characters)
 ```
 
-Digesten skrives til filen; stderr-linjen viser hvor. Mappen oprettes, hvis den mangler. Tegnantallet afhænger bl.a. af stiens længde — Kilde-linjen indeholder den fulde sti.
+The digest is written to the file; the stderr line says where. The folder is
+created if it is missing. The character count depends on the path length — the
+source line contains the full path.
 
-## Hvad digesten indeholder
+## What the digest contains
 
-Per løb:
+Per run:
 
-- **Per-km splits** med pace og gennemsnitspuls; sidste del-km markeres med `*`.
-- **HR-drift (decoupling):** pace-normaliseret effektivitet i første vs. anden halvdel, warm-up og pauser ekskluderet. I agent-formatet er tærsklerne i SIGNALS-sektionen: >5 % = aerob kapacitet presset, >10 % = decideret presset.
-- **Negativ/positiv split:** pace-forskel mellem de to halvdele.
-- **Pauser:** stop >20 s uden fremdrift — antal og samlet tid.
-- **Pace-jævnhed:** variationskoefficient på km-splits.
-- **Zoner:** tid i Z1–Z5 (effektiv tid, pauser ekskluderet) og roligt-andelen, Z1–Z2.
-- **Træningsbelastning:** `load` = sum(min i zone × 1..5) — det belastningstal, der kan sammenlignes uge for uge.
-- **Kadence:** gennemsnit fra filen, når den findes.
-- **Distance-udledning:** mangler filen distance-felter, udledes distancen af GPS-positioner (haversine); mangler hastigheden, udledes den af distance og tid med glatning. Digesten siger det med en note.
+- **Per-km splits** with pace and average heart rate; the last partial km is
+  marked with `*`.
+- **HR drift (decoupling):** pace-normalised efficiency in the first vs. the
+  second half, warm-up and pauses excluded. In the agent format the
+  thresholds are in the SIGNALS section: >5 % = aerobic capacity under
+  pressure, >10 % = clearly under pressure.
+- **Negative/positive split:** the pace difference between the two halves.
+- **Pauses:** stops >20 s without progress — count and total time.
+- **Pace consistency:** coefficient of variation over the km splits.
+- **Zones:** time in Z1–Z5 (effective time, pauses excluded) and the easy
+  share, Z1–Z2.
+- **Training load:** `load` = sum(min in zone × 1..5) — the load number you
+  can compare week by week.
+- **Cadence:** average from the file, when it is there.
+- **Distance derivation:** if the file has no distance fields, the distance is
+  derived from GPS positions (haversine); if the speed is missing, it is
+  derived from distance and time with smoothing. The digest says so with a
+  note.
 
-Over turene:
+Across the runs:
 
-- **Ugeoversigt** (`## WEEKS`): løb, km, tid, belastning og gennemsnitspuls pr. ISO-uge — den tætteste måde at se tendenser.
-- **Vindue-sammenligning** (`## WINDOW`): de seneste 28 dage (`--days N`) mod de 28 dage før, med ændringen i km og belastning.
-- **Statistik** (`## STATS`): total km, median, længste tur, hurtigste gennemsnit, største pause mellem to løb, gennemsnitlig drift og samlet zonefordeling.
+- **Week overview** (`## WEEKS`): runs, km, time, load and average heart rate
+  per ISO week — the tightest way to see trends.
+- **Window comparison** (`## WINDOW`): the last 28 days (`--days N`) against
+  the 28 days before, with the change in km and load.
+- **Statistics** (`## STATS`): total km, median, longest run, fastest
+  average, the biggest gap between two runs, average drift and the overall
+  zone split.
 
-Kun bulk-tilstanden har felterne fra `activities.csv`: navnet fra eksporten, Relative Effort og udstyr (vist per løb) samt kalorier (med i JSON). Løse filer tager navnet fra filnavnet og udelader resten frem for at opdigte det.
+Only the bulk mode has the fields from `activities.csv`: the name from the
+export, Relative Effort and gear (shown per run) plus calories (included in
+the JSON). Loose files take the name from the filename and omit the rest
+rather than inventing it.
 
-## Zoner
+## Zones
 
-Zonelinjen pr. løb viser hvor tiden faktisk blev brugt: procent i Z1–Z5, vægtet med effektiv tid efter samme pause-regel som splits. Baseline-blokken summerer sekunderne over løbene i vinduet og viser hvor stor en andel der var roligt arbejde, Z1–Z2.
+The zone line per run shows where the time actually went: percent in Z1–Z5,
+weighted by effective time using the same pause rule as the splits. The
+baseline block sums the seconds across the runs in the window and shows how
+big a share was easy work, Z1–Z2.
 
-Grænserne hentes i denne rækkefølge — der gættes aldrig:
+The boundaries are taken in this order — nothing is ever guessed:
 
-1. `--max-hr N` (flaget vinder).
-2. Urets egne zoner, hvis FIT-filen har `zones_target`/`hr_zone`-beskeder (`fra uret` i output).
-3. Ellers ingen zonefordeling — kun en note på turen om hvorfor.
+1. `--max-hr N` (the flag wins).
+2. The watch's own zones, if the FIT file has `zones_target`/`hr_zone`
+   messages (`from the watch` in the output).
+3. Otherwise no zone split — just a note on the run saying why.
 
-Når der skal bruges en standardmodel (flaget, eller urets max-puls uden grænser), er den i procent af max-puls:
+When a standard model is needed (the flag, or the watch's max HR without
+boundaries), it is a percentage of max heart rate:
 
-| Zone | Puls |
+| Zone | Heart rate |
 |------|------|
-| Z1 | 50–60 % af max |
-| Z2 | 60–70 % af max |
-| Z3 | 70–80 % af max |
-| Z4 | 80–90 % af max |
-| Z5 | 90–100 % af max |
+| Z1 | 50–60 % of max |
+| Z2 | 60–70 % of max |
+| Z3 | 70–80 % of max |
+| Z4 | 80–90 % of max |
+| Z5 | 90–100 % of max |
 
-Har FIT-filen zonegrænser men ingen max-puls, udledes max-pulsen af den øverste grænse med standardmodellen — Z4 slutter ved 90 % af max, så max-pulsen er filens øverste grænse / 0,9 (afrundet). Det er en udledning af filens egne grænser, ikke et gæt.
+If the FIT file has zone boundaries but no max heart rate, the max HR is
+derived from the top boundary with the standard model — Z4 ends at 90 % of
+max, so the max HR is the file's top boundary / 0.9 (rounded). That is a
+derivation of the file's own boundaries, not a guess.
 
-Digestens zonelinje skriver hvilken max-puls og kilde zonerne kommer fra (`fra uret` eller `fra --max-hr`), så output er deterministisk sammenligneligt.
+The digest's zone line writes which max HR and source the zones come from
+(`from the watch` or `from --max-hr`), so the output is deterministically
+comparable.
 
-## Robusthed der er bygget ind med vilje
+## Robustness that is built in on purpose
 
-Eksporten er **lokaliseret**, og det er en kendt fælde: en tredjeparts importer blev brudt af kinesiske kolonnenavne. Derfor:
+The export is **localised**, and that is a known trap: a third-party importer
+was broken by Chinese column names. Therefore:
 
-- **Kolonner mappes via aliaser** (engelsk + dansk) med eksakt match først, så løsere match. Alt umappet listes i digestens "Noter", så et nyt alias er én linje i `src/columns.ts`.
-- **Datoer parses eksplicit.** `new Date("12. okt. 2026, 06:32")` er `Invalid Date`, og `new Date("12.10.2026")` giver *10. december* (US-rækkefølge) — en stille fejl. Vi læser dag-måned-år ved punktum/bindestreg, måned-dag ved skråstreg, og håndterer 12-timers AM/PM.
-- **Aktivitetstyper oversættes.** Strava viser typen på brugerens sprog — "Run" bliver "Løb" på en dansk konto — så type-matchningen normaliserer `ø/æ/å` før den sammenligner. Uden det faldt 190 af 195 løb ud af puljen.
-- **Stravas FIT-filer er særdeles.** Hvert felt ligger i sin egen besked, så distance, puls og højde står spredt uden for de enkelte poster. Beskederne slås sammen pr. tidspunkt, og distance interpoleres mellem målingerne.
-- **`activities.csv` er autoritativ** for koblingen aktivitets-ID → filnavn; manglende filer giver en note på turen i stedet for et crash.
-- **Varierende formater**: samme tur kan være `.fit.gz`, `.fit`, `.tcx.gz`, `.tcx` eller `.gpx`. Mangler distancen i filen, udledes den af GPS (haversine), og mangler hastigheden, udledes den af distance/tid med glatning.
-- **Mislabellede `.gz`**: en `.fit.gz` der ikke er gzip falder tilbage til rå bytes.
-- **Arkiver læses streamende**: `media/` (billeder og videoer inde i eksporten) springes over, og intet pakkes ud til disk.
+- **Columns are mapped via aliases** (English + Danish) with an exact match
+  first, then a looser match. Everything unmapped is listed in the digest's
+  "Notes", so a new alias is one line in `src/columns.ts`.
+- **Dates are parsed explicitly.** `new Date("12. okt. 2026, 06:32")` is
+  `Invalid Date`, and `new Date("12.10.2026")` gives *10 December* (US
+  order) — a silent error. We read day-month-year at dots/dashes, month-day
+  at slashes, and handle the 12-hour AM/PM clock.
+- **Activity types are translated.** Strava shows the type in the user's
+  language — "Run" becomes "Løb" on a Danish account — so the type matching
+  normalises `ø/æ/å` before comparing. Without it, 190 of 195 runs fell out
+  of the pool.
+- **Strava's FIT files are peculiar.** Every field lives in its own message,
+  so distance, heart rate and elevation are spread out beyond the individual
+  records. The messages are merged per timestamp, and distance is interpolated
+  between measurements.
+- **`activities.csv` is authoritative** for linking the activity ID to the
+  filename; missing files give a note on the run instead of a crash.
+- **Varying formats:** the same run can be `.fit.gz`, `.fit`, `.tcx.gz`,
+  `.tcx` or `.gpx`. If the distance is missing from the file, it is derived
+  from GPS (haversine), and if the speed is missing, it is derived from
+  distance/time with smoothing.
+- **Mislabelled `.gz`:** a `.fit.gz` that is not gzip falls back to raw bytes.
+- **Archives are read as a stream**: `media/` (the images and videos inside
+  the export) is skipped, and nothing is unpacked to disk.
 
-## Fejlfinding og kendte grænser
+## Troubleshooting and known limits
 
-- **Flag uden sti fejler** i stedet for at vise den interaktive vælger: `strava-digest --last 5` skriver `mangler sti til eksport (zip, mappe eller aktivitetsfil)` og stopper med exit-kode 1.
-- **En TCX uden både distance-felter og GPS-positioner** kan vise `0,00 km`; det samme kan et GPX-spor, hvor positionerne ikke flytter sig. Der står en note om, at distancen er udledt af GPS. En FIT-fil uden distance viser `–` i løse-fil-tilstanden; i bulk-tilstanden, hvor `activities.csv` bærer distancen, viser den i stedet `0,00 km`.
-- **Filer uden brugbar tid** og filer med under 2 punkter springes over med en note — i digesten som `1 fil sprunget over: UdenTid.gpx (ingen brugbar tid)`, i `--list` med `(sprunget over)` og grunden, fx `(kun 1 punkt)`.
+- **A flag without a path fails** instead of showing the interactive picker:
+  `strava-digest --last 5` prints `missing path to export (zip, folder or
+  activity file)` and stops with exit code 1.
+- **A TCX without both distance fields and GPS positions** can show `0.00
+  km`; the same can happen with a GPX track where the positions do not move.
+  There is a note saying the distance was derived from GPS. A FIT file
+  without distance shows `–` in loose-file mode; in bulk mode, where
+  `activities.csv` carries the distance, it shows `0.00 km` instead.
+- **Files without usable time** and files with fewer than 2 points are
+  skipped with a note — in the digest as `1 file skipped: NoTime.gpx (no
+  usable time)`, in `--list` as `(skipped)` and the reason, e.g. `(only 1
+  point)`.
 
-## Den menneskelige halvdel: context.md
+## The human half: context.md
 
-Kopiér `context.example.md` til `context.md` og skriv hvad ugen *skulle* være, dagsform og søvn. Uden den kan agenten kun gentage dine egne tal tilbage til dig. `--context FIL` peger på en anden fil; standard er `./context.md`, hvis den findes.
+Copy `context.example.md` to `context.md` and write what the week was
+*supposed* to be, your form and your sleep. Without it the agent can only
+repeat your own numbers back to you. `--context FIL` points at another file;
+the default is `./context.md`, if it exists.
 
-## Test
+## Tests
 
 ```
-npm test          # genererer syntetiske fixtures og verificerer hele pipelinen
+npm test          # generates synthetic fixtures and verifies the whole pipeline
 npm run typecheck
 ```
 
-Testene er syntetiske — ingen persondata, ingen rigtige GPS-spor. De tjekker bl.a. distance, antal splits, HR-drift-interval, negativ split, puls-niveau og at digesten er under 4 KB og mindst 50× mindre end rådata. De dækker også løse aktivitetsfiler (dato, type og puls læst fra filen, note ved filer uden tidsstempel), zonevalget (flag → urets zoner → ingen) og den rene `discoverSources`-funktion bag den interaktive start.
+The tests are synthetic — no personal data, no real GPS tracks. They check
+distance, number of splits, the HR drift interval, negative split, heart-rate
+level and that the digest is under 4 KB and at least 50× smaller than the raw
+data. They also cover loose activity files (date, type and heart rate read
+from the file, a note for files without a timestamp), the zone selection
+(flag → watch's zones → none) and the pure `discoverSources` function behind
+the interactive start.
 
 ## Compliance
 
-Dette værktøj rører **ikke** Strava-API'en: ingen credentials, ingen kald, ingen server. Det læser en fil, som brugeren selv har hentet via Stravas Bulk Data Export Tool — en rettighed Strava beskriver sådan (API Policy 2026, §6.6):
+This tool does **not** touch the Strava API: no credentials, no calls, no
+server. It reads a file the user has downloaded themselves through Strava's
+Bulk Data Export Tool — a right Strava describes as follows (API Policy 2026,
+§6.6):
 
 > "Each Strava user has the right to access and export the user's own Strava
 > data, free of charge, through the Bulk Data Export Tool published on the
 > Strava service. Nothing in this Agreement is intended to limit or condition
 > that user-facing right."
 
-Digesten er lavet til at blive læst af en agent, men eksporten er brugerens egen, og hvad brugeren gør med den, er brugerens valg. Værktøjet selv kalder hverken Strava-API'en eller nogen LLM, og det gemmer eller sender intet — det læser lokale filer og skriver et lokalt dokument.
+The digest is meant to be read by an agent, but the export is the user's own,
+and what the user does with it is the user's choice. The tool itself calls
+neither the Strava API nor any LLM, and it stores or sends nothing — it reads
+local files and writes a local document.
 
-Andet end §6.6-citatet ovenfor er ikke verificeret her: hvilke øvrige paragraffer i Stravas vilkår der gælder for den enkelte brug, ved vi ikke, og vi gætter ikke. Læs Stravas egne vilkår, hvis du er i tvivl.
+Nothing beyond the §6.6 quote above has been verified here: which other
+paragraphs of Strava's terms apply to the individual use, we do not know, and
+we do not guess. Read Strava's own terms if you are in doubt.
 
-Hold eksporten og `runs/` ude af versionskontrol (se `.gitignore`): filerne indeholder GPS-spor og andre persondata.
+Keep the export and `runs/` out of version control (see `.gitignore`): the
+files contain GPS tracks and other personal data.
 
-## Afhængigheder
+## Dependencies
 
-To runtime-afhængigheder: `fit-file-parser` (FIT) og `yauzl` (streamende zip-læsning). Begge er ren JS, og gunzip kommer fra `node:zlib` — ingen native moduler, ingen build-step. CI kører testene på macOS, Linux og Windows med Node 22 og 24.
+Two runtime dependencies: `fit-file-parser` (FIT) and `yauzl` (streaming zip
+reading). Both are pure JS, and gunzip comes from `node:zlib` — no native
+modules, no build step. CI runs the tests on macOS, Linux and Windows with
+Node 22 and 24.
 
-## Testdata og attribution
+## Test data and attribution
 
-Alle fixtures genereres af `scripts/make-fixtures.mjs` og er syntetiske — ingen persondata, ingen rigtige GPS-spor, ingen rigtig puls. Undtagelsen er `fixtures/sample.fit`, som er et offentligt eksempel på en FIT-fil fra [`dtcooper/python-fitparse`](https://github.com/dtcooper/python-fitparse) (`tests/files/Activity.fit`, MIT), brugt til at teste FIT-parsingen på en ægte binær fil frem for en generator.
+All fixtures are generated by `scripts/make-fixtures.mjs` and are synthetic —
+no personal data, no real GPS tracks, no real heart rate. The exception is
+`fixtures/sample.fit`, which is a public example of a FIT file from
+[`dtcooper/python-fitparse`](https://github.com/dtcooper/python-fitparse)
+(`tests/files/Activity.fit`, MIT), used to test the FIT parsing on a real
+binary file rather than on a generator.
 
-## Licens
+## License
 
-MIT — se [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

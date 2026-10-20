@@ -36,6 +36,31 @@ export const RUN_TYPES = [
   'lob',
   'loeb',
   'lope',
+  // German
+  'lauf',
+  'laufg',
+  'wanderung',
+  // Swedish / Norwegian
+  'lopning',
+  'lopping',
+  'lop',
+  'traillop',
+  // Dutch
+  'hardlopen',
+  'loop',
+  'wandeling',
+  // French
+  'course',
+  'course a pied',
+  'course pied',
+  'randonnee',
+  // Spanish / Italian / Portuguese
+  'carrera',
+  'corsa',
+  'corrida',
+  'passeio',
+  // Finnish
+  'juoksu',
 ];
 
 /**
@@ -46,10 +71,17 @@ export const RUN_TYPES = [
 export function normalizeType(type: string): string {
   return type
     .toLowerCase()
+    // NFD + combining-mark removal folds every Latin accent: ö→o, é→e,
+    // ü→u, ñ→n. Without it a Swedish "Löp" became "lp" — the letter was
+    // deleted, not folded — so no alias could ever match it.
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    // æ, ø and å are separate letters and do not decompose.
     .replace(/æ/g, 'ae')
     .replace(/ø/g, 'o')
     .replace(/å/g, 'a')
     .replace(/[^a-z ]/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 

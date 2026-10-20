@@ -246,7 +246,7 @@ function statsSection(runs: DigestedRun[]): string[] {
     });
   }
 
-  out.push('## STATS (hele perioden)');
+  out.push('## STATS (whole period)');
   out.push(`runs=${runs.length} km_total=${n(totalKm, 1)} median_km=${median != null ? n(median, 2) : MISSING}`);
   if (longest) {
     out.push(
@@ -258,7 +258,7 @@ function statsSection(runs: DigestedRun[]): string[] {
       `fastest_avg_pace=${n(fastest.p, 1)} s/km on ${fastest.run.row.date.toISOString().slice(0, 10)} (${fastest.run.row.name})`,
     );
   }
-  out.push(`max_gap=${n(maxGap, 1)} dage${gapBetween ? ` (${gapBetween})` : ''}`);
+  out.push(`max_gap=${n(maxGap, 1)} days${gapBetween ? ` (${gapBetween})` : ''}`);
   out.push(
     `drift_avg=${avgDrift != null ? n(avgDrift, 1) : MISSING} drift_min=${drifts.length ? n(Math.min(...drifts), 1) : MISSING} drift_max=${drifts.length ? n(Math.max(...drifts), 1) : MISSING}`,
   );
@@ -298,34 +298,36 @@ export function renderAgent(input: AgentInput): string {
   out.push(`activities_in_export=${input.activitiesInExport}`);
   out.push(`runs_in_export=${input.runsTotal}`);
   out.push(`runs_shown=${runs.length}`);
-  out.push(`detail_runs=${Math.min(input.detailCount, runs.length)} (nyeste, får split-opdeling)`);
+  // detailCount <= 0 means "all runs get per-km splits".
+  const detailAll = input.detailCount <= 0;
+  out.push(`detail_runs=${detailAll ? runs.length : Math.min(input.detailCount, runs.length)} (newest, include per-km splits)`);
   out.push(`max_hr=${input.maxHr != null ? input.maxHr : MISSING} source=${input.maxHrSource ?? MISSING}`);
   out.push('');
 
   out.push('## SCHEMA');
-  out.push('række-felter (én løb pr. linje, nyeste først):');
-  out.push('  d=ISO8601 tidspunkt (UTC) | n=navn | km=distance | t=bevægelsestid i sekunder');
-  out.push('  pace=sekunder pr. km | hr=gennemsnit/maks puls | z=Z1,Z2,Z3,Z4,Z5 i % af tid med puls');
-  out.push('  elev=højdemeter i m | drift=pace-normaliseret HR-drift i % (se SIGNALS)');
-  out.push('  half=2. halvdel minus 1. halvdel i s/km (negativ = negativ split)');
-  out.push('  cv=pace-jævnhed, variationskoefficient i % | pause=antal pauser');
-  out.push('  load=træningsbelastning, sum(min i zone * 1..5)');
-  out.push('  sp=per-km splits: <km>:<pace_s/km>@<puls>, * = ufuldstændig km');
-  out.push('uger-felter: w=ISO-uge | r=løb | km=distance | t=sekunder | load=belastning | hr=gn.puls');
-  out.push('vindue-felter: n=løb | km | t | pace | hr | load | z=Z1..Z5 %');
-  out.push(`decimaltegn=punktum | manglende=${MISSING} | enheder=SI undtagen puls(bpm) og procent`);
+  out.push('run fields (one run per line, newest first):');
+  out.push('  d=ISO8601 timestamp (UTC) | n=name | km=distance | t=elapsed moving time in seconds');
+  out.push('  pace=seconds per km | hr=average/max heart rate | z=Z1,Z2,Z3,Z4,Z5 as % of time with HR');
+  out.push('  elev=elevation gain in m | drift=pace-normalised aerobic decoupling in % (see SIGNALS)');
+  out.push('  half=second half minus first half in s/km (negative = negative split)');
+  out.push('  cv=pace consistency, coefficient of variation in % | pause=number of pauses');
+  out.push('  load=training load, sum(minutes in zone * 1..5)');
+  out.push('  sp=per-km splits: <km>:<pace_s/km>@<avg_hr>, * = partial km');
+  out.push('week fields: w=ISO week | r=runs | km=distance | t=seconds | load=load | hr=average HR');
+  out.push('window fields: n=runs | km | t | pace | hr | load | z=Z1..Z5 %');
+  out.push(`decimal=dot | missing=${MISSING} | units=SI except heart rate (bpm) and percent`);
   out.push('');
 
   out.push('## SIGNALS');
-  out.push('drift: pace-normaliseret aerob decoupling i %. Værdi > 5 peger på at den aerobe pris steg mens tempoet holdt.');
-  out.push('  < 3 = stabil | 3-5 = let forhøjet | > 5 = aerob kapacitet presset | > 10 = decideret presset');
-  out.push('half: negativ = anden halvdel hurtigere end den første (negativ split).');
-  out.push('cv: pace-jævnhed i %. < 3 = jævn | 3-5 = varierende | > 5 = ujævn (cykling, pauser, terræn).');
-  out.push('load: sum(min i zone * 1..5). Sammenlign uge for uge; et spring på > 20 % er belastningsrisiko.');
-  out.push('z: procent af bevægelsestiden i hver pulszone. Z1 50-60 %, Z2 60-70 %, Z3 70-80 %, Z4 80-90 %, Z5 90-100 % af max.');
+  out.push('drift: pace-normalised aerobic decoupling in %. A value > 5 means aerobic cost rose while pace held.');
+  out.push('  < 3 = stable | 3-5 = slightly elevated | > 5 = aerobic capacity under pressure | > 10 = clearly under pressure');
+  out.push('half: negative = second half faster than the first (negative split).');
+  out.push('cv: pace consistency in %. < 3 = steady | 3-5 = variable | > 5 = uneven (hills, stops, trail).');
+  out.push('load: sum(minutes in zone * 1..5). Compare week to week; a jump > 20 % is a load risk.');
+  out.push('z: percent of moving time in each heart-rate zone. Z1 50-60 %, Z2 60-70 %, Z3 70-80 %, Z4 80-90 %, Z5 90-100 % of max.');
   out.push('');
 
-  out.push('## WEEKS (nyeste først)');
+  out.push('## WEEKS (newest first)');
   for (const w of weeks) {
     out.push(
       `w=${w.week} r=${w.runs} km=${n(w.km, 1)} t=${s(w.movingSec)} load=${w.load > 0 ? n(w.load) : MISSING} hr=${w.hrCount ? n(w.hrSum / w.hrCount) : MISSING}`,
@@ -333,23 +335,23 @@ export function renderAgent(input: AgentInput): string {
   }
   out.push('');
 
-  out.push(`## WINDOW (seneste ${input.baselineDays} dage vs. de ${input.baselineDays} dage før)`);
+  out.push(`## WINDOW (last ${input.baselineDays} days vs. the ${input.baselineDays} days before)`);
   const fmtWin = (x: typeof cur): string =>
     `n=${x.n} km=${n(x.km, 1)} t=${s(x.movingSec)} pace=${x.pace != null ? n(x.pace, 1) : MISSING} hr=${x.avgHr != null ? n(x.avgHr) : MISSING} load=${x.load != null ? n(x.load) : MISSING} z=${x.z ? x.z.map((p) => n(p, 1)).join(',') : MISSING}`;
-  out.push(`seneste: ${fmtWin(cur)}`);
-  out.push(`forrige: ${fmtWin(prev)}`);
+  out.push(`recent: ${fmtWin(cur)}`);
+  out.push(`previous: ${fmtWin(prev)}`);
   if (cur.n > 0 && prev.n > 0) {
     const dKm = prev.km > 0 ? ((cur.km - prev.km) / prev.km) * 100 : null;
     const dLoad = cur.load != null && prev.load ? ((cur.load - prev.load) / prev.load) * 100 : null;
     out.push(
-      `ændring: km=${dKm != null ? n(dKm, 1) : MISSING} % load=${dLoad != null ? n(dLoad, 1) : MISSING} %`,
+      `change: km=${dKm != null ? n(dKm, 1) : MISSING} % load=${dLoad != null ? n(dLoad, 1) : MISSING} %`,
     );
   }
   out.push('');
 
-  out.push(`## RUNS (${runs.length}, nyeste først)`);
+  out.push(`## RUNS (${runs.length}, newest first)`);
   runs.forEach((run, i) => {
-    out.push(runLine(run, i < input.detailCount));
+    out.push(runLine(run, detailAll || i < input.detailCount));
   });
   out.push('');
 
@@ -357,7 +359,7 @@ export function renderAgent(input: AgentInput): string {
   out.push('');
 
   if (input.contextText.trim()) {
-    out.push('## CONTEXT (brugerens egen tekst — plan, søvn, formål)');
+    out.push("## CONTEXT (the user's own notes — plan, sleep, intent)");
     out.push(input.contextText.trim());
     out.push('');
   }
@@ -365,11 +367,11 @@ export function renderAgent(input: AgentInput): string {
   out.push('## NOTES');
   for (const note of input.notes) out.push(`- ${note}`);
   out.push(
-    `- zoner bruger max_hr=${input.maxHr ?? MISSING} (${input.maxHrSource ?? 'ingen kilde'}). ` +
-      'Zonegrænserne er 50-100 % af max; de afviger fra dit ur, hvis dit ur bruger andre grænser.',
+    `- zones use max_hr=${input.maxHr ?? MISSING} (${input.maxHrSource ?? 'no source'}). ` +
+      'The zone boundaries are 50-100 % of max; they differ from your watch if your watch uses different boundaries.',
   );
   out.push(
-    '- split-opdeling er kun med for de nyeste løb (feltet sp). `*` markerer en ufuldstændig kilometer.',
+    '- per-km splits are only included for the newest runs (the sp field). `*` marks a partial kilometre.',
   );
 
   return out.join('\n') + '\n';

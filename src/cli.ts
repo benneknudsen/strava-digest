@@ -31,46 +31,47 @@ interface Args {
   format: 'agent' | 'md';
 }
 
-const HELP = `strava-digest — aktivitetsfiler eller Strava-eksport (zip) -> kompakt træningsdigest
+const HELP = `strava-digest — activity files or a Strava export (zip) -> compact training digest
 
-  strava-digest <eksport.zip|mappe|aktivitetsfil|aktivitetsmappe> [flag]
-  strava-digest            interaktiv vælger, når du kører i en terminal
+  strava-digest <export.zip|folder|activity-file|activity-folder> [flags]
+  strava-digest            interactive picker, when run in a terminal
 
-  --last N        antal løb i digesten (default: alle)
-  --detail N      antal nyeste løb der får fuld split-opdeling (default 10)
-  --all           tag alle aktivitetstyper med, ikke kun løb
-  --list          vis kun indekset af aktiviteter
-  --find          find mulige eksporter og print dem som stier (én pr. linje)
-  --install-skill kopierer agent-skillen til de agenter der findes på maskinen
-  --out FIL       skriv til fil i stedet for stdout
-  --json          maskinlæsbar JSON i stedet for digest
-  --format md     menneskelæsbar Markdown i stedet for agent-format
-  --days N        sammenligningsvindue i dage (default 28)
-  --max-hr N      max-puls til zonefordeling (Z1–Z5 = 50–100 % af max)
-  --context FIL   kontekstfil der flettes ind (default ./context.md hvis den findes)
+  --last N        number of runs in the digest (default: all)
+  --detail N      only the newest N runs get per-km splits (default: all)
+  --all           include all activity types, not just runs
+  --list          show only the index of activities
+  --find          find possible exports and print them as paths (one per line)
+  --install-skill copy the agent skill to the agents found on this machine
+  --out FIL       write to a file instead of stdout
+  --json          machine-readable JSON instead of the digest
+  --format md     human-readable Markdown instead of the agent format
+  --days N        comparison window in days (default 28)
+  --max-hr N      max heart rate for the zone split (Z1–Z5 = 50–100 % of max)
+  --context FIL   context file to embed (default ./context.md if it exists)
 
-Standardformatet er et agent-format: én maskinlæsbar linje pr. løb med
-alle felter, en ugeoversigt og en SCHEMA-sektion, så en LLM kan læse
-hele eksporten uden at gætte, hvad felterne betyder.
+The default output is an agent format: one machine-readable line per run
+with every field, a week overview and a SCHEMA section, so an LLM can read
+the whole export without guessing what the fields mean.
 
---find scanner de samme steder som den interaktive vælger og printer
-én sti pr. linje, så et script eller en agent kan finde eksporten
-uden at parse en menneskelæsbar liste.
+--find scans the same places as the interactive picker and prints one
+path per line, so a script or an agent can locate the export without
+parsing a human-readable list.
 
-Kilder:
-  zip eller mappe med activities.csv   fuld Strava bulk-eksport
-  enkelt aktivitetsfil eller mappe     .fit, .gpx eller .tcx (også .gz);
-                                       metadata læses fra filerne selv — navnet
-                                       kommer fra filnavnet, og Relative Effort,
-                                       udstyr og kalorier findes ikke uden
-                                       activities.csv
+Sources:
+  zip or folder with activities.csv   a full Strava bulk export
+  single activity file or folder      .fit, .gpx or .tcx (also .gz);
+                                       metadata is read from the files themselves — the
+                                       name comes from the filename, and Relative
+                                       Effort, gear and calories are not available
+                                       without activities.csv
 
-Zippen læses streamende — intet udpakkes til disk, og media/ røres aldrig.
+The zip is read as a stream — nothing is unpacked to disk, and media/ is
+never touched.
 
-Tip: du kan trække filen ind i terminalvinduet i stedet for at skrive
-stien — macOS, Linux og Windows indsætter den fulde sti for dig.
+Tip: you can drag the file into the terminal instead of typing the path —
+macOS, Linux and Windows all paste the full path for you.
 
-Kræver Node >= 22.18. Ingen GUI, ingen server, ingen installation i øvrigt.`;
+Requires Node >= 22.18. No GUI, no server, no other installation.`;
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
@@ -118,7 +119,7 @@ async function main(): Promise<number> {
     await source.close();
     const files = await collectActivityFiles(args.input);
     if (files.length) return runLoose(args, args.input, true, files);
-    console.error(`Kunne ikke finde activities.csv i ${label}. Er det en Strava bulk-eksport?`);
+    console.error(`Could not find activities.csv in ${label}. Is it a Strava bulk export?`);
     return 1;
   }
 
@@ -131,7 +132,7 @@ async function main(): Promise<number> {
     const found = findActivitiesCsv(source);
     if (!found) {
       console.error(
-        `Kunne ikke finde activities.csv i ${source.label}. Er det en Strava bulk-eksport?`,
+        `Could not find activities.csv in ${source.label}. Is it a Strava bulk export?`,
       );
       return 1;
     }
@@ -187,11 +188,11 @@ async function runBulk(
   if (args.list) {
     for (const a of activities.slice(0, 400)) {
       console.log(
-        `${a.date.toISOString().slice(0, 10)}  ${a.isRun ? 'LØB' : '   '}  ${a.type.padEnd(14)}  ${a.filename}  zoner: ${await zoneStatus(source, found.root, a.filename)}`,
+        `${a.date.toISOString().slice(0, 10)}  ${a.isRun ? 'RUN' : '   '}  ${a.type.padEnd(14)}  ${a.filename}  zones: ${await zoneStatus(source, found.root, a.filename)}`,
       );
     }
-    console.log(`\n${activities.length} aktiviteter i alt (vist: ${Math.min(400, activities.length)})`);
-    if (map.unmatched.length) console.log(`\nUmappede kolonner: ${map.unmatched.join(' · ')}`);
+    console.log(`\n${activities.length} activities in total (shown: ${Math.min(400, activities.length)})`);
+    if (map.unmatched.length) console.log(`\nUnmapped columns: ${map.unmatched.join(' · ')}`);
     return 0;
   }
 
@@ -201,7 +202,7 @@ async function runBulk(
   // stadig begrænse, og da er det et bevidst valg.
   const limit = args.last > 0 ? args.last : pool.length;
   if (!pool.length) {
-    console.error('Ingen løb fundet i eksporten (prøv --all).');
+    console.error('No runs found in the export (try --all).');
     return 1;
   }
 
@@ -251,26 +252,26 @@ async function runBulk(
     unmatchedHeaders: map.unmatched,
     contextText,
     generatedAt: new Date(),
-    poolLabel: args.all ? 'Aktiviteter' : 'Løb',
+    poolLabel: args.all ? 'Activities' : 'Runs',
     maxHr: args.maxHr ?? observedMaxHr ?? null,
     maxHrSource: zoneSource,
     notes: [
       ...(map.unmatched.length
-        ? ['Kolonner uden mapping: ' + map.unmatched.join(' · ')]
+        ? ['Unmapped columns: ' + map.unmatched.join(' · ')]
         : []),
       ...(args.maxHr == null && observedMaxHr != null
         ? [
-            `max_hr=${observedMaxHr} er det højeste puls-tal i eksporten (observeret), ikke dit ur's egen max-puls. ` +
-              'Stravas bulk-eksport indeholder ikke urets zonekonfiguration, så zonegrænserne er et bedste bud.',
+            `max_hr=${observedMaxHr} is the highest heart-rate value in the export (observed), not your watch's own max HR. ` +
+              "Strava's bulk export does not contain the watch's zone configuration, so the zone boundaries are a best guess.",
           ]
         : []),
     ],
     zoneHint:
       args.maxHr == null && observedMaxHr != null
-        ? `observeret puls-maks i eksporten er ${observedMaxHr} — brug --max-hr ${observedMaxHr}`
+        ? `observed max HR in the export is ${observedMaxHr} — use --max-hr ${observedMaxHr}`
         : undefined,
     hostNote: map.unmatched.length
-      ? 'Tilføj aliasser i src/columns.ts hvis et felt mangler i digesten.'
+      ? 'Add aliases in src/columns.ts if a field is missing from the digest.'
       : undefined,
   };
 
@@ -292,7 +293,7 @@ const LOOSE_HOST_NOTE =
 /** Filer der ikke kan blive et pas: for få punkter eller ingen brugbar tid. */
 function skipReason(track: Track): string {
   const n = track.points.length;
-  return n > 0 && n < MIN_TRACK_POINTS ? `kun ${n} punkt` : 'ingen brugbar tid';
+  return n > 0 && n < MIN_TRACK_POINTS ? `only ${n} point${n === 1 ? '' : 's'}` : 'no usable time';
 }
 
 async function runLoose(
@@ -331,14 +332,14 @@ async function runLoose(
   if (args.list) {
     for (const e of [...usable, ...skipped].slice(0, 400)) {
       const date = e.run ? e.run.row.date.toISOString().slice(0, 10) : '????-??-??';
-      const type = e.run ? e.run.row.type : e.track && e.track.sport !== 'unknown' ? e.track.sport : 'ukendt';
+      const type = e.run ? e.run.row.type : e.track && e.track.sport !== 'unknown' ? e.track.sport : 'unknown';
       console.log(
-        `${date}  ${e.run?.row.isRun ? 'LØB' : '   '}  ${type.padEnd(14)}  ${basename(e.file)}  zoner: ${e.track?.zones ? 'ja' : 'nej'}${e.run ? '' : '  (sprunget over)'}`,
+        `${date}  ${e.run?.row.isRun ? 'RUN' : '   '}  ${type.padEnd(14)}  ${basename(e.file)}  zones: ${e.track?.zones ? 'yes' : 'no'}${e.run ? '' : '  (skipped)'}`,
       );
     }
-    console.log(`\n${files.length} aktivitetsfiler i alt (vist: ${Math.min(400, files.length)})`);
+    console.log(`\n${files.length} activity files in total (shown: ${Math.min(400, files.length)})`);
     if (skipped.length) {
-      console.log(`\nSprunget over: ${skipped.map((e) => `${basename(e.file)} (${e.reason})`).join(' · ')}`);
+      console.log(`\nSkipped: ${skipped.map((e) => `${basename(e.file)} (${e.reason})`).join(' · ')}`);
     }
     return 0;
   }
@@ -351,7 +352,7 @@ async function runLoose(
     const skipNote = skipped.length
       ? ` Sprunget over: ${skipped.map((e) => basename(e.file)).join(', ')}.`
       : '';
-    console.error(`Ingen løb fundet i aktivitetsfilerne (prøv --all).${skipNote}`);
+    console.error(`No runs found in the activity files (try --all).${skipNote}`);
     return 1;
   }
 
@@ -366,8 +367,8 @@ async function runLoose(
 
   const digestInput = {
     sourceLabel: isDir
-      ? `${input} (mappe, ${files.length} aktivitetsfil${files.length === 1 ? '' : 'er'}) · metadata læst fra filerne`
-      : `${input} (fil) · metadata læst fra filen`,
+      ? `${input} (folder, ${files.length} activity file${files.length === 1 ? '' : 's'}) · metadata read from the files`
+      : `${input} (file) · metadata read from the file`,
     activitiesInExport: files.length,
     runsTotal: pool.length,
     runs: chosen,
@@ -376,7 +377,7 @@ async function runLoose(
     unmatchedHeaders: [] as string[],
     contextText: await readContext(args.context),
     generatedAt: new Date(),
-    poolLabel: args.all ? 'Aktiviteter' : 'Løb',
+    poolLabel: args.all ? 'Activities' : 'Runs',
     maxHr: args.maxHr ?? null,
     maxHrSource: args.maxHr != null ? ('flag' as const) : null,
     notes,
@@ -426,7 +427,10 @@ function parseArgs(argv: string[]): Args {
     baselineDays: 28,
     context: 'context.md',
     maxHr: null,
-    detail: 10,
+    // 0 = alle løb får splits. Prisen er lille: på 196 løb koster det
+    // ~2.900 ekstra tokens, og splits med puls er det, en coach-agent
+    // faktisk analyserer på.
+    detail: 0,
     format: 'agent',
   };
   for (let i = 0; i < argv.length; i++) {
@@ -444,7 +448,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--format') args.format = next().trim() === 'md' ? 'md' : 'agent';
     else if (!a.startsWith('-') && !args.input) args.input = a;
   }
-  if (!args.input) throw new Error('mangler sti til eksport (zip, mappe eller aktivitetsfil)');
+  if (!args.input) throw new Error('missing path to an export (zip, folder or activity file)');
   return args;
 }
 
@@ -476,15 +480,15 @@ function parseMaxHr(value: string): number {
 }
 
 /** Svarer kort på om aktivitetsfilen selv indeholder zonedata (kun FIT kan). */
-async function zoneStatus(source: ExportSource, root: string, filename: string): Promise<'ja' | 'nej'> {
-  if (!/\.fit(\.gz)?$/i.test(filename.trim())) return 'nej';
+async function zoneStatus(source: ExportSource, root: string, filename: string): Promise<'yes' | 'no'> {
+  if (!/\.fit(\.gz)?$/i.test(filename.trim())) return 'no';
   const entry = resolveActivityEntry(source, root, filename);
-  if (!entry) return 'nej';
+  if (!entry) return 'no';
   try {
     const track = parseActivityBuffer(entry, await source.read(entry));
-    return track.zones ? 'ja' : 'nej';
+    return track.zones ? 'yes' : 'no';
   } catch {
-    return 'nej';
+    return 'no';
   }
 }
 

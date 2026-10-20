@@ -28,14 +28,82 @@ export type Field =
   | 'avgSpeed'
   | 'temperature';
 
+/**
+ * Aliases per field, per language. Strava localises the export, so the same
+ * column arrives under a different name depending on the account language.
+ * English and Danish are the ones we have real exports for; the rest are the
+ * obvious translations and are cheap to add — one line each.
+ */
 const ALIASES: Record<Field, string[]> = {
-  id: ['activity id', 'aktivitet id', 'aktivitets id', 'id'],
-  date: ['activity date', 'aktivitet dato', 'aktivitetdato', 'dato', 'startdato', 'start date'],
-  name: ['activity name', 'aktivitet navn', 'aktivitetnavn', 'navn', 'title'],
-  type: ['activity type', 'aktivitetstype', 'aktivitet type', 'sport', 'sports type'],
-  elapsedSec: ['elapsed time', 'samlet tid', 'forlobet tid', 'forloebet tid', 'varighed'],
-  movingSec: ['moving time', 'bevaegelsestid', 'bevagelsestid', 'tid i bevaegelse'],
-  distance: ['distance', 'afstand', 'distance km', 'distancen'],
+  id: ['activity id', 'aktivitet id', 'aktivitets id', 'id', 'aktivitats id'],
+  date: [
+    'activity date',
+    'aktivitet dato',
+    'aktivitetdato',
+    'dato',
+    'startdato',
+    'start date',
+    'aktivitatsdatum',
+    'datum',
+    'fecha de actividad',
+    'date de activite',
+  ],
+  name: [
+    'activity name',
+    'aktivitet navn',
+    'aktivitetnavn',
+    'navn',
+    'title',
+    'aktivitatsnamn',
+    'name',
+    'nom de lactivite',
+    'nombre',
+  ],
+  type: [
+    'activity type',
+    'aktivitetstype',
+    'aktivitet type',
+    'sport',
+    'sports type',
+    'aktivitatstyp',
+    'aktivitatstype',
+    'type dactivite',
+    'tipo de actividad',
+  ],
+  elapsedSec: [
+    'elapsed time',
+    'samlet tid',
+    'forlobet tid',
+    'forloebet tid',
+    'varighed',
+    'verbrannte zeit',
+    'gesamtzeit',
+    'tidsforbruk',
+    'tid anvand',
+    'duree totale',
+    'tiempo total',
+  ],
+  movingSec: [
+    'moving time',
+    'bevaegelsestid',
+    'bevagelsestid',
+    'tid i bevaegelse',
+    'bewegungszeit',
+    'rortid',
+    'beweegtijd',
+    'duree en mouvement',
+    'tiempo en movimiento',
+  ],
+  distance: [
+    'distance',
+    'afstand',
+    'distance km',
+    'distancen',
+    'distanz',
+    'distanse',
+    'afstand km',
+    'distancia',
+  ],
   avgHr: [
     'average heart rate',
     'gennemsnitlig puls',
@@ -43,24 +111,114 @@ const ALIASES: Record<Field, string[]> = {
     'gns puls',
     'average hr',
     'avg hr',
+    'durchschnittliche herzfrequenz',
+    'mittlere herzfrequenz',
+    'genomsnittlig hjartefrekvens',
+    'gemiddelde hartfrequentie',
+    'frecuencia cardiaca media',
+    'frequence cardiaque moyenne',
   ],
-  maxHr: ['max heart rate', 'maks puls', 'makspuls', 'max puls', 'max hr'],
-  avgCadence: ['average cadence', 'gennemsnitlig kadence', 'gns kadence'],
-  maxCadence: ['max cadence', 'maks kadence'],
-  avgWatts: ['average watts', 'gennemsnitlig watt', 'gns watt'],
-  relativeEffort: ['relative effort', 'relativ indsats', 'relativ effort'],
+  maxHr: [
+    'max heart rate',
+    'maks puls',
+    'makspuls',
+    'max puls',
+    'max hr',
+    'maximale herzfrequenz',
+    'hoechste herzfrequenz',
+    'maksimal hjartefrekvens',
+    'maximale hartfrequentie',
+    'frecuencia cardiaca maxima',
+    'frequence cardiaque maximale',
+  ],
+  avgCadence: [
+    'average cadence',
+    'gennemsnitlig kadence',
+    'gns kadence',
+    'durchschnittliche kadenz',
+    'snittkadens',
+    'gemiddelde cadans',
+    'cadencia media',
+  ],
+  maxCadence: [
+    'max cadence',
+    'maks kadence',
+    'maximale kadenz',
+    'maksimalkadens',
+    'maximale cadans',
+    'cadencia maxima',
+  ],
+  avgWatts: [
+    'average watts',
+    'gennemsnitlig watt',
+    'gns watt',
+    'durchschnittliche watt',
+    'genomsnittlig watt',
+    'gemiddelde watt',
+    'potencia media',
+  ],
+  relativeEffort: [
+    'relative effort',
+    'relativ indsats',
+    'relativ effort',
+    'relative anstrengung',
+    'relativt anstrengelse',
+    'relatieve inspanning',
+    'esfuerzo relativo',
+  ],
   elevationGain: [
     'elevation gain',
     'hojdeforogelse',
     'stigning',
     'hoejdeforoegelse',
     'samlet stigning',
+    'hoehenzuwachs',
+    'hoehenanstieg',
+    'hohenanstieg',
+    'hohen zuwachs',
+    'hoying',
+    'total hoying',
+    'toename in hoogte',
+    'desnivelado acumulado',
   ],
-  calories: ['calories', 'kalorier'],
-  gear: ['activity gear', 'aktivitetsudstyr', 'aktivitet udstyr', 'udstyr', 'gear'],
-  filename: ['filename', 'filnavn', 'fil'],
-  avgSpeed: ['average speed', 'gennemsnitshastighed', 'gennemsnitlig hastighed'],
-  temperature: ['weather temperature', 'temperatur', 'vejr temperatur'],
+  calories: [
+    'calories',
+    'kalorier',
+    'kalorier',
+    'kalorien',
+    'kcal',
+    'calories',
+  ],
+  gear: [
+    'activity gear',
+    'aktivitetsudstyr',
+    'aktivitet udstyr',
+    'udstyr',
+    'gear',
+    'ausrustung',
+    'utrustning',
+    'uitrusting',
+    'equipo',
+  ],
+  filename: ['filename', 'filnavn', 'fil', 'dateiname', 'filnavn', 'bestandsnaam', 'nombre de archivo'],
+  avgSpeed: [
+    'average speed',
+    'gennemsnitshastighed',
+    'gennemsnitlig hastighed',
+    'durchschnittsgeschwindigkeit',
+    'snittfart',
+    'gemiddelde snelheid',
+    'velocidad media',
+  ],
+  temperature: [
+    'weather temperature',
+    'temperatur',
+    'vejr temperatur',
+    'wettertemperatur',
+    'temperatur ved',
+    'weertemperatuur',
+    'temperatura',
+  ],
 };
 
 /** lowercase, drop unit parentheses, strip accents, collapse non-alphanumerics */
@@ -155,20 +313,40 @@ export function durationSec(row: string[], map: ColumnMap, field: Field): number
   return n;
 }
 
+/**
+ * Month names, keyed by their accent-stripped lowercase form. Strava writes
+ * the month in the account language, so the same export needs "October",
+ * "oktober", "Oktober", "octobre", "oktober" or "octubre" to all mean month
+ * 10. `normalizeMonthKey` strips the accents, so "février" is stored as
+ * "fevrier" and "März" as "marz".
+ */
 const MONTHS: Record<string, number> = {
-  jan: 0, january: 0, januar: 0,
-  feb: 1, february: 1, februar: 1,
-  mar: 2, march: 2, marts: 2,
-  apr: 3, april: 3,
-  may: 4, maj: 4,
-  jun: 5, june: 5, juni: 5,
+  jan: 0, january: 0, januar: 0, janvier: 0, enero: 0, januari: 0,
+  feb: 1, february: 1, februar: 1, fevrier: 1, febrero: 1, februari: 1,
+  mar: 2, march: 2, marts: 2, marz: 2, mars: 2, marzo: 2, maart: 2,
+  apr: 3, april: 3, avril: 3, abril: 3,
+  may: 4, maj: 4, mai: 4, mayo: 4, mei: 4,
+  jun: 5, june: 5, juni: 5, junio: 5,
   jul: 6, july: 6, juli: 6,
-  aug: 7, august: 7,
-  sep: 8, sept: 8, september: 8,
-  oct: 9, october: 9, okt: 9, oktober: 9,
-  nov: 10, november: 10,
-  dec: 11, december: 11,
+  aug: 7, august: 7, aout: 7, agosto: 7, augusti: 7, avgust: 7,
+  sep: 8, sept: 8, september: 8, septembre: 8, septiembre: 8,
+  oct: 9, october: 9, okt: 9, oktober: 9, octobre: 9, octubre: 9,
+  nov: 10, november: 10, novembre: 10, noviembre: 10,
+  dec: 11, december: 11, desember: 11, decembre: 11, diciembre: 11,
 };
+
+/** lowercase, drop dots, strip accents and the Danish letters */
+function normalizeMonthKey(monthName: string): string {
+  return monthName
+    .toLowerCase()
+    .replace(/\./g, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/æ/g, 'ae')
+    .replace(/ø/g, 'o')
+    .replace(/å/g, 'a')
+    .trim();
+}
 
 /**
  * Strava localises the export, and the date is part of it: an English account
@@ -188,14 +366,15 @@ export function parseDate(v: string): Date | null {
   }
 
   // "12. okt. 2026, 06:32(:10)" / "12 oktober 2026 06.32"
+  // "12 de octubre de 2026, 06:32" (spansk) — "de" står før og efter navnet
   const dmy = s.match(
-    /^(\d{1,2})\.?\s+([A-Za-zæøåÆØÅ]+)\.?,?\s+(\d{4}),?\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*(am|pm)?/i,
+    /^(\d{1,2})\.?\s+(?:de\s+)?([A-Za-z\u00C0-\u024FæøåÆØÅ]+)\.?(?:\s+de)?,?\s+(\d{4}),?\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*(am|pm)?/i,
   );
   if (dmy) return build(Number(dmy[3]), dmy[2]!, Number(dmy[1]), dmy[4]!, dmy[5]!, dmy[6], dmy[7]);
 
   // "Oct 12, 2026, 6:32:10 AM"
   const mdy = s.match(
-    /^([A-Za-zæøåÆØÅ]+)\.?\s+(\d{1,2}),?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?/i,
+    /^([A-Za-z\u00C0-\u024FæøåÆØÅ]+)\.?\s+(\d{1,2}),?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?/i,
   );
   if (mdy) return build(Number(mdy[3]), mdy[1]!, Number(mdy[2]), mdy[4]!, mdy[5]!, mdy[6], mdy[7]);
 
@@ -236,8 +415,7 @@ function build(
 ): Date | null {
   let month = monthNumber;
   if (month == null) {
-    const key = monthName!.toLowerCase().replace(/\./g, '');
-    month = MONTHS[key];
+    month = MONTHS[normalizeMonthKey(monthName!)];
   }
   if (month == null) return null;
 

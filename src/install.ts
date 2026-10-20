@@ -93,7 +93,7 @@ export async function installSkill(
     // filer agenten aldrig læser.
     const parentExists = await stat(skillsRoot).then((s) => s.isDirectory()).catch(() => false);
     if (!targetDirs?.length && !parentExists) {
-      results.push({ target: t.name, path: dest, status: 'ikke fundet', detail: 'agenten ser ikke ud til at være installeret' });
+      results.push({ target: t.name, path: dest, status: 'ikke fundet', detail: 'the agent does not appear to be installed' });
       continue;
     }
     // Opdater en eksisterende skill in place, så vi ikke ender med to
@@ -146,10 +146,10 @@ export function renderInstall(result: { results: InstallResult[]; source: string
   }
   out.push('');
   if (ok.length) {
-    out.push('Genstart agenten, og spørg den om dine løb.');
-    out.push('Fx: "hvordan var min uge?" eller "hvad var min langseste tur?"');
+    out.push('Restart the agent and ask it about your runs.');
+    out.push('E.g. "how was my week?" or "what was my longest run?"');
   } else {
-    out.push('Ingen agent blev fundet. Angiv en mappe manuelt:');
+    out.push('No agent was found. Point at a skills folder manually:');
     out.push('  strava-digest --install-skill ~/.hermes/skills');
   }
   return out.join('\n');
