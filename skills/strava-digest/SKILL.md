@@ -79,12 +79,35 @@ of the five zones.
 
 ## Step 3: the context
 
-`context.md` in the folder you run the tool from holds the user's own plan
-(the week's training, sleep, body, intent). It is embedded in every digest.
-Read it as **context, not data** — it says what the run was *supposed* to
-be, so you can judge it against the intent instead of only describing it.
+`context.md` holds the user's own plan (the week's training, sleep, body,
+intent). It is embedded in every digest. Read it as **context, not data** —
+it says what the run was *supposed* to be, so you can judge it against the
+intent instead of only describing it.
+
+The tool looks for `./context.md` — that is, in the folder you run it from.
+If the user has it somewhere else, pass it explicitly:
+
+```bash
+strava-digest <path> --context /path/to/context.md
+```
+
+If there is no context file, the digest says so and the answer is limited to
+describing the data. Ask the user for their plan instead of inventing one.
 
 Users can start from `context.example.md`.
+
+## Start small
+
+On a large export the digest is ~14,900 tokens. That is fine, but for a
+first look, or when the model is slow, narrow it:
+
+```bash
+strava-digest <path> --last 30          # the last 30 runs
+strava-digest <path> --last 30 --days 14  # a two-week window
+```
+
+`--last` limits the runs, `--days` the comparison window. The full history
+is what finds trends, so widen it once the first answer looks right.
 
 ## Max heart rate and zones
 
