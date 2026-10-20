@@ -1,0 +1,16 @@
+# Normalisér linjeskift på tværs af platforme.
+#
+# Uden denne konverterer Git på Windows LF -> CRLF ved checkout. En skill
+# eller et script, der er skrevet med LF, lander så med CRLF, og en test
+# der forventer en bestemt linjeskiftsekvens fejler — præcis som det skete
+# i CI med skillens frontmatter.
+#
+# eol=lf gør den samme fil byte-identisk på macOS, Linux og Windows, hvilket
+# er det en agent-skill skal være: samme indhold uanset platform.
+* text=auto eol=lf
+
+# Binær fil: skal aldrig røres af linjeskifterne.
+fixtures/sample.fit binary
+*.fit binary
+*.gz binary
+*.zip binary

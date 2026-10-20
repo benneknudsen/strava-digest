@@ -282,7 +282,16 @@ try {
   check('--install-skill fortæller hvor den landede', instOut.includes('SKILL.md'), (v) => v === true);
   check('--install-skill siger hvad der skal spørges om', instOut.includes('how was my week'), (v) => v === true);
   const installed = await readFile(join(skillDir, 'SKILL.md'), 'utf8');
-  check('installeret skill har gyldig frontmatter', installed.startsWith('---\nname: strava-digest'), (v) => v === true);
+  // Linjeskift må ikke afgøre frontmatter: Git på Windows konverterer
+  // LF -> CRLF ved checkout, så den installerede skill kan have \r\n.
+  // .gitattributes sørger for LF, men testen skal ikke være sårbar hvis
+  // nogen kører den på en klon uden den.
+  check(
+    'installeret skill har gyldig frontmatter',
+    /^---\r?\nname:\s*strava-digest\r?\n/.test(installed),
+    (v) => v === true,
+  );
+  check('installeret skill har ingen CRLF', installed.includes('\r\n'), (v) => v === false);
   check('installeret skill er generisk (ingen personlige oplysninger)', !/macmini|Benjamin/i.test(installed), (v) => v === true);
 
   // En eksisterende skill skal opdateres in place, ikke duplikeres —
