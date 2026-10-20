@@ -240,8 +240,8 @@ async function runBulk(
 
   const contextText = await readContext(args.context);
   const observedMaxHr = observedMaxHeartRate(activities);
-  const zoneSource: 'flag' | 'fit' | 'eksport-observation' | null =
-    args.maxHr != null ? 'flag' : observedMaxHr != null ? 'eksport-observation' : null;
+  const zoneSource: 'flag' | 'fit' | 'export-observation' | null =
+    args.maxHr != null ? 'flag' : observedMaxHr != null ? 'export-observation' : null;
   const input = {
     sourceLabel: source.label,
     activitiesInExport: activities.length,

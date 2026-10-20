@@ -32,7 +32,7 @@ export interface DigestInput {
   /** max-puls brugt til zonefordelingen */
   maxHr?: number | null;
   /** hvor max-pulsen kom fra */
-  maxHrSource?: 'flag' | 'fit' | 'eksport-observation' | null;
+  maxHrSource?: 'flag' | 'fit' | 'export-observation' | null;
   /** noter til agenten (udeladte felter, forbehold) */
   notes?: string[];
 }

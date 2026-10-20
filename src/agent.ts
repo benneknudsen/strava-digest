@@ -32,7 +32,7 @@ export interface AgentInput {
   contextText: string;
   generatedAt: Date;
   maxHr: number | null;
-  maxHrSource: 'flag' | 'fit' | 'eksport-observation' | null;
+  maxHrSource: 'flag' | 'fit' | 'export-observation' | null;
   notes: string[];
 }
 
