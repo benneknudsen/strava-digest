@@ -10,6 +10,7 @@ import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
 import { mapColumns, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
 import { renderMarkdown, fmtPace } from '../src/digest.ts';
+import { renderAgent } from '../src/agent.ts';
 import { discoverSources } from '../src/interactive.ts';
 import { isActivityFile, rowFromTrack } from '../src/loose.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
@@ -17,6 +18,56 @@ import { normalizeType, RUN_TYPES, toActivities } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'strava-digest-test-'));
+
+/**
+ * Byg et syntetisk løb til agent-format-tests. Har samme facade som
+ * DigestedRun, så agent.ts kan testes uden rigtige sporfiler.
+ */
+function mkRun(iso, name, km, movingSec, avgHr, maxHr, relativeEffort, elevGainM) {
+  const date = new Date(iso);
+  return {
+    row: {
+      id: '1',
+      date,
+      name,
+      type: 'Løb',
+      filename: `${name}.fit`,
+      isRun: true,
+      distanceM: km * 1000,
+      movingSec,
+      elapsedSec: movingSec,
+      avgHr,
+      maxHr,
+      relativeEffort,
+      gear: '',
+      calories: null,
+    },
+    analysis: {
+      movingSec,
+      distanceM: km * 1000,
+      elevGainM,
+      avgPaceSecPerKm: movingSec / km,
+      avgHr,
+      maxHr,
+      zones: [60, 1200, 600, 0, 0],
+      zonePct: [3.2, 64.5, 32.3, 0, 0],
+      zoneMaxHr: 200,
+      zoneSource: 'flag',
+      zoneConfigured: true,
+      avgCadence: 84,
+      splits: [
+        { km: 1, paceSecPerKm: 330, avgHr: 150, elevDeltaM: 5, partial: false },
+        { km: 2, paceSecPerKm: 328, avgHr: 155, elevDeltaM: 4, partial: false },
+      ],
+      hrDriftPct: 4.2,
+      secondHalfPaceDeltaSec: -8,
+      pauseCount: 0,
+      pauseSec: 0,
+      paceCvPct: 2.1,
+      distanceDerived: false,
+    },
+  };
+}
 let failures = 0;
 let enkeltRoot = null;
 
@@ -158,11 +209,19 @@ try {
 
   await source.close();
 
-  // CLI-vejen på samme mappe
+  // CLI-vejen på samme mappe. Standardformatet er agent-formatet.
   const cli = execFileSync('node', ['src/cli.ts', tmp, '--last', '2'], { encoding: 'utf8' });
-  check('CLI skriver digest', cli.includes('# Træningsdigest'), (v) => v === true);
-  check('CLI viser HR-drift', cli.includes('HR-drift'), (v) => v === true);
-  check('CLI uden max-puls: note om manglende zoner', cli.includes('ingen zonefordeling'), (v) => v === true);
+  check('CLI skriver agent-digest', cli.includes('# STRAVA DIGEST v2 (agent-format)'), (v) => v === true);
+  check('CLI har SCHEMA-sektion', cli.includes('## SCHEMA'), (v) => v === true);
+  check('CLI viser HR-drift som felt', /drift=-?\d/.test(cli), (v) => v === true);
+  check('CLI uden max-puls: zonefelt er tomt', cli.includes('z=-'), (v) => v === true);
+  check('CLI-agent har én linje pr. løb', (cli.match(/^d=\d{4}-/gm) ?? []).length, (v) => v === 2);
+
+  // Markdown-formatet er stadig tilgængeligt med --format md
+  const cliMd = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--format', 'md'], { encoding: 'utf8' });
+  check('--format md giver menneske-Markdown', cliMd.includes('# Træningsdigest'), (v) => v === true);
+  check('--format md viser Zoner-linje', cliMd.includes('- **Zoner:** Z1 '), (v) => v === true);
+  check('--format md viser baseline-roligt', cliMd.includes('roligt (Z1–Z2)'), (v) => v === true);
 
   const cliJson = JSON.parse(
     execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--json'], { encoding: 'utf8' }),
@@ -172,8 +231,13 @@ try {
   check('zoneprocenter i JSON summer til 100', cliJson.runs[0]?.analysis?.zonePct?.reduce((s, p) => s + p, 0) ?? null, (v) => v != null && Math.abs(v - 100) < 1);
 
   const cliZones = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240'], { encoding: 'utf8' });
-  check('CLI-digest viser Zoner-linje', cliZones.includes('- **Zoner:** Z1 '), (v) => v === true);
-  check('CLI-digest viser baseline-roligt', cliZones.includes('roligt (Z1–Z2)'), (v) => v === true);
+  check('CLI-agent viser zonefordeling', /z=\d/.test(cliZones), (v) => v === true);
+  check('CLI-agent markerer zonekilden', cliZones.includes('max_hr=240 source=flag'), (v) => v === true);
+  check('CLI-agent har WINDOW-sektion', cliZones.includes('## WINDOW'), (v) => v === true);
+  check('CLI-agent har STATS-sektion', cliZones.includes('## STATS'), (v) => v === true);
+  check('CLI-agent har WEEKS-sektion', cliZones.includes('## WEEKS'), (v) => v === true);
+  check('CLI-agent har splits for detaljerede løb', /sp=\d+:/.test(cliZones), (v) => v === true);
+  check('CLI-agent bruger punktum som decimaltegn', cliZones.includes('km=10.00'), (v) => v === true);
 
   const cliList = execFileSync('node', ['src/cli.ts', tmp, '--list'], { encoding: 'utf8' });
   check('--list viser zone-status', cliList.includes('zoner: nej'), (v) => v === true);
@@ -201,14 +265,14 @@ try {
   check('loose fil: RE, udstyr og kalorier udeladt', [looseSingle.runs[0]?.row?.relativeEffort, looseSingle.runs[0]?.row?.gear, looseSingle.runs[0]?.row?.calories], (v) => v[0] === null && v[1] === '' && v[2] === null);
   check('loose fil: header siger metadata fra filen', String(looseSingle.sourceLabel), (v) => v.includes('(fil)') && v.includes('metadata læst fra filen'));
 
-  const looseDirMd = execFileSync('node', ['src/cli.ts', looseDir, '--last', '3'], { encoding: 'utf8' });
+  const looseDirMd = execFileSync('node', ['src/cli.ts', looseDir, '--last', '3', '--format', 'md'], { encoding: 'utf8' });
   check('loose mappe: header siger mappe og metadata fra filerne', looseDirMd, (v) => v.includes('(mappe, 4 aktivitetsfiler)') && v.includes('metadata læst fra filerne'));
   check('loose mappe: noten siger at navnet kommer fra filnavnet', looseDirMd, (v) => v.includes('eksportens navn ikke') && v.includes('kommer fra filnavnet'));
   check('loose mappe: fil uden brugbar tid sprunget over med note', looseDirMd, (v) => v.includes('sprunget over') && v.includes('UdenTid.gpx'));
   check('loose mappe: tre løb i digesten', looseDirMd, (v) => v.includes('3 løb i digesten'));
 
   const looseZones = execFileSync('node', ['src/cli.ts', looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });
-  check('loose: zoner med --max-hr', looseZones, (v) => v.includes('- **Zoner:** Z1 ') && v.includes('fra --max-hr'));
+  check('loose: zoner med --max-hr', looseZones, (v) => /z=\d/.test(v) && v.includes('max_hr=240 source=flag'));
 
   const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
   check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zoner: nej'));
@@ -426,6 +490,48 @@ try {
   check('pace 360 sek vises 6:00', fmtPace(360), (v) => v === '6:00/km');
   check('pace 61 sek vises 1:01', fmtPace(61), (v) => v === '1:01/km');
   check('pace 0 vises som –', fmtPace(0), (v) => v === '–');
+
+  /* ---- agent-formatet (Del E) ---- */
+
+  const agentRuns = [
+    mkRun('2026-10-14T10:00:00Z', 'Tæppe', 8, 3200, 150, 170, 92, 40),
+    mkRun('2026-10-16T10:00:00Z', 'Tæppe', 10, 4000, 155, 175, 88, 50),
+    mkRun('2026-10-16T18:00:00Z', 'Tæppe', 5, 2000, 140, 160, 80, 30),
+    // En uge tidligere, så ugeaggregatet har to uger at tælle
+    mkRun('2026-10-08T10:00:00Z', 'Tæppe', 6, 2400, 145, 165, 70, 20),
+  ];
+  const agentOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 3,
+    runsTotal: 3,
+    runs: agentRuns,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: 'plan: 3 løb/uge',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+
+  check('agent: har SCHEMA', agentOut.includes('## SCHEMA'), (v) => v === true);
+  check('agent: har SIGNALS med tærskler', agentOut.includes('> 5 = aerob kapacitet presset'), (v) => v === true);
+  check('agent: én linje pr. løb', (agentOut.match(/^d=\d{4}-/gm) ?? []).length, (v) => v === 4);
+  check('agent: nyeste løb først', agentOut.indexOf('2026-10-16T18') < agentOut.indexOf('2026-10-14'), (v) => v === true);
+  check('agent: har WEEKS', agentOut.includes('## WEEKS'), (v) => v === true);
+  check('agent: uge linje har antal løb', /w=2026-W42 r=3/.test(agentOut), (v) => v === true);
+  check('agent: to uger tælles separat', /w=2026-W41 r=1/.test(agentOut), (v) => v === true);
+  check('agent: har WINDOW', agentOut.includes('## WINDOW'), (v) => v === true);
+  check('agent: har STATS', agentOut.includes('## STATS'), (v) => v === true);
+  check('agent: STATS har total km', agentOut.includes('km_total=29.0'), (v) => v === true);
+  check('agent: STATS har længste løb', agentOut.includes('longest_run=10.00'), (v) => v === true);
+  check('agent: STATS har største pause', agentOut.includes('max_gap='), (v) => v === true);
+  check('agent: kontekst er med', agentOut.includes('plan: 3 løb/uge'), (v) => v === true);
+  check('agent: kun detaljerede løb får splits', (agentOut.match(/sp=\d+:/g) ?? []).length, (v) => v === 1);
+  check('agent: load vægter zoner', /load=\d+/.test(agentOut), (v) => v === true);
+  check('agent: ingen dansk komma i decimal', !/km=\d+,\d/.test(agentOut), (v) => v === true);
+  check('agent: feltnavne er konsistente', agentOut.includes('pace=') && agentOut.includes('drift=') && agentOut.includes('half='), (v) => v === true);
+  check('agent: notes-sektion findes', agentOut.includes('## NOTES'), (v) => v === true);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });

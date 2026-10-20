@@ -27,6 +27,14 @@ export interface DigestInput {
   hostNote?: string;
   /** hjælpetekst når zonekonfigurationen mangler, fx et observeret puls-maks */
   zoneHint?: string;
+  /** antal løb i eksportens pulje (kan være mere end runs.length) */
+  runsTotal?: number;
+  /** max-puls brugt til zonefordelingen */
+  maxHr?: number | null;
+  /** hvor max-pulsen kom fra */
+  maxHrSource?: 'flag' | 'fit' | 'eksport-observation' | null;
+  /** noter til agenten (udeladte felter, forbehold) */
+  notes?: string[];
 }
 
 const num = (v: number | null | undefined, digits = 0, fallback = '–'): string =>
