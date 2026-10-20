@@ -9,7 +9,7 @@ import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
 import { mapColumns, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
-import { renderMarkdown } from '../src/digest.ts';
+import { renderMarkdown, fmtPace } from '../src/digest.ts';
 import { discoverSources } from '../src/interactive.ts';
 import { isActivityFile, rowFromTrack } from '../src/loose.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
@@ -420,6 +420,12 @@ try {
     poolLabel: 'Løb',
   });
   check('baseline tæller hele vinduet', wide.includes('3 løb'), (v) => v === true);
+
+  // 6) Pace-rundingen må ikke give 5:60
+  check('pace 359,6 sek vises 6:00', fmtPace(359.6), (v) => v === '6:00/km');
+  check('pace 360 sek vises 6:00', fmtPace(360), (v) => v === '6:00/km');
+  check('pace 61 sek vises 1:01', fmtPace(61), (v) => v === '1:01/km');
+  check('pace 0 vises som –', fmtPace(0), (v) => v === '–');
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });

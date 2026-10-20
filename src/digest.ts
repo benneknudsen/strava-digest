@@ -43,8 +43,10 @@ const zoneLine = (pcts: number[]): string =>
 
 export function fmtPace(secPerKm: number | null | undefined): string {
   if (secPerKm == null || !Number.isFinite(secPerKm) || secPerKm <= 0) return '–';
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
+  // 359,6 sek skal vise 6:00 — ikke 5:60. Rundingen carryes derfor over.
+  const total = Math.round(secPerKm);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}/km`;
 }
 
