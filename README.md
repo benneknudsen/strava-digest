@@ -6,19 +6,16 @@ history for ~14,000 tokens instead of ~22 MB of GPS data. **457× smaller**, on
 a real 196-run export.
 
 ```bash
-npm install -g strava-digest
-```
-
-Or from source:
-
-```bash
 git clone https://github.com/benneknudsen/strava-digest.git && cd strava-digest
 npm install
 npm link        # gives you the global `strava-digest` command
 ```
 
-Requires Node ≥ 22.18. No build step — newer Node runs the TypeScript directly.
-`npm link` is optional; `node src/cli.ts <path>` works just as well.
+`npm install` also builds `dist/`, which is what the `strava-digest` command
+points at. Requires Node ≥ 22.18.
+
+Not on npm yet — cloning takes about twenty seconds. If you would rather have
+`npm install -g strava-digest`, say so in an issue.
 
 ## Get your export
 

@@ -21,3 +21,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # Bygningen er det, der publiceres til npm, saa den skal vaere
+      # gron i CI - ikke kun typecheck af kilden.
+      - run: npm run build
+      - run: node dist/cli.js --help

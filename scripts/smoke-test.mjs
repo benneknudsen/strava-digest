@@ -272,7 +272,7 @@ try {
   mkdirSync(extraDir, { recursive: true });
   const srcCsv = readFileSync(extraCsv, 'utf8');
   const lines = srcCsv.split('\n');
-  const header = lines[0]!;
+  const header = lines[0] ?? '';
   const withExtra = [
     header + ',Vindhastighed',
     ...lines.slice(1).filter(Boolean).map((l) => l + ',12,3'),
@@ -289,6 +289,19 @@ try {
   check('markdown-formatet beholder listen', extraMd, (v) =>
     /Unmapped columns \(\d+\)/.test(v) && v.includes('Vindhastighed'),
   );
+
+  // Det er dist/ der publiceres til npm, ikke kilden. Node kan ikke
+  // straekke TypeScript under node_modules, saa bygningen er ikke
+  // valgfri - den skal og den skal give samme svar som kilden.
+  const distCli = join(repoRoot, 'dist', 'cli.js');
+  if (existsSync(distCli)) {
+    const distOut = execFileSync('node', [distCli, tmp], { encoding: 'utf8' });
+    const srcOut = execFileSync('node', [join(repoRoot, 'src', 'cli.ts'), tmp], { encoding: 'utf8' });
+    const strip = (s) => s.split('\n').filter((l) => !l.startsWith('generated=')).join('\n');
+    check('bygget output er identisk med kilden', strip(distOut), (v) => v === strip(srcOut));
+  } else {
+    check('bygget output er identisk med kilden (kræver npm run build)', 'skip', (v) => v === 'skip');
+  }
   check('CLI-agent har WINDOW-sektion', cliZones.includes('## WINDOW'), (v) => v === true);
   check('CLI-agent har STATS-sektion', cliZones.includes('## STATS'), (v) => v === true);
   check('CLI-agent har WEEKS-sektion', cliZones.includes('## WEEKS'), (v) => v === true);
