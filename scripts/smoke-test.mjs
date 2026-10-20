@@ -5,6 +5,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, wri
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
 import { mapColumns, parseDate } from '../src/columns.ts';
@@ -18,6 +19,8 @@ import { normalizeType, RUN_TYPES, toActivities } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'strava-digest-test-'));
+/** Rodden i repoet, så tests kan kalde CLI'en med absolut sti. */
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
 /**
  * Byg et syntetisk løb til agent-format-tests. Har samme facade som
@@ -241,6 +244,16 @@ try {
 
   const cliList = execFileSync('node', ['src/cli.ts', tmp, '--list'], { encoding: 'utf8' });
   check('--list viser zone-status', cliList.includes('zoner: nej'), (v) => v === true);
+
+  // --find: maskinlæsbart, én sti pr. linje, exit-kode der afslører fund.
+  // Køres med fixture'en som cwd, så den scanner den og ikke repoet.
+  const cliPath = join(repoRoot, 'src', 'cli.ts');
+  const findOut = execFileSync('node', [cliPath, '--find'], { encoding: 'utf8', cwd: tmp });
+  const findLines = findOut.trim().split('\n').filter(Boolean);
+  check('--find printer stier uden nummerering', findLines.every((l) => l.startsWith('/')), (v) => v === true);
+  check('--find finder eksportmappen', findOut.includes(tmp), (v) => v === true);
+  check('--find har ingen overskrift', !findOut.includes('Kandidat') && !findOut.includes('Vælg'), (v) => v === true);
+  check('--find kører uden TTY', findOut.length > 0, (v) => v === true);
 
   let hrErr = null;
   try {

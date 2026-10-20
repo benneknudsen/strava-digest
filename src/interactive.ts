@@ -10,6 +10,8 @@ export interface Candidate {
   path: string;
   kind: 'csv-mappe' | 'zip' | 'aktivitetsmappe' | 'aktivitetsfil';
   count: number;
+  /** aktivitetsfiler LIGE i mappen (ikke i undermapper) */
+  directCount: number;
   mtimeMs: number;
 }
 
@@ -46,23 +48,31 @@ export async function discoverSources(dirs: string[]): Promise<Candidate[]> {
  * antallet pr. mappe. Samme pruning som `collectActivityFiles`: skjulte mapper
  * og `media/` springes over. Kandidaterne slår dermed op i stedet for at
  * walke rekursivt hver for sig.
+ *
+ * Tællingen returnerer BÅDE det samlede antal i træet OG antallet der
+ * ligger lige i mappen. Forskellen betyder noget for `--find`: en mappe
+ * med 200 filer i en undermappe er en rodet mappe, mens en mappe med 12
+ * filer LIGE i sig er en rigtig eksport.
  */
-async function countActivityFilesByDir(root: string): Promise<Map<string, number>> {
-  const counts = new Map<string, number>();
+async function countActivityFilesByDir(root: string): Promise<Counts> {
+  const counts: Counts = { total: new Map(), direct: new Map() };
 
   async function walk(dir: string): Promise<number> {
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
     if (!entries) return 0;
     let total = 0;
+    let here = 0;
     for (const e of entries) {
       if (e.isDirectory()) {
         if (e.name.startsWith('.') || e.name.toLowerCase() === 'media') continue;
         total += await walk(join(dir, e.name));
       } else if (isActivityFile(e.name)) {
         total++;
+        here++;
       }
     }
-    counts.set(dir, total);
+    counts.total.set(dir, total);
+    counts.direct.set(dir, here);
     return total;
   }
 
@@ -70,10 +80,17 @@ async function countActivityFilesByDir(root: string): Promise<Map<string, number
   return counts;
 }
 
+interface Counts {
+  /** aktivitetsfiler i hele træet under mappen */
+  total: Map<string, number>;
+  /** aktivitetsfiler lige i mappen */
+  direct: Map<string, number>;
+}
+
 async function classify(
   path: string,
   known: Stats | undefined,
-  counts: Map<string, number>,
+  counts: Counts,
 ): Promise<Candidate | null> {
   const st = known ?? (await stat(path).catch(() => null));
   if (!st) return null;
@@ -83,22 +100,44 @@ async function classify(
     const hasCsv = entries.some((e) => e.isFile() && e.name.toLowerCase() === 'activities.csv');
     // Sjældne top-level-mapper (skjulte, media/, symlinks) er ikke med i
     // gennemløbet og tælles derfor på den gamle, rekursive måde.
-    const count = counts.get(path) ?? (await collectActivityFiles(path).catch(() => [])).length;
-    if (hasCsv) return { path, kind: 'csv-mappe', count, mtimeMs: st.mtimeMs };
-    if (count > 0) return { path, kind: 'aktivitetsmappe', count, mtimeMs: st.mtimeMs };
+    const count = counts.total.get(path) ?? (await collectActivityFiles(path).catch(() => [])).length;
+    const directCount = counts.direct.get(path) ?? 0;
+    if (hasCsv) return { path, kind: 'csv-mappe', count, directCount, mtimeMs: st.mtimeMs };
+    if (count > 0) return { path, kind: 'aktivitetsmappe', count, directCount, mtimeMs: st.mtimeMs };
     return null;
   }
   if (!st.isFile()) return null;
-  if (isActivityFile(path)) return { path, kind: 'aktivitetsfil', count: 1, mtimeMs: st.mtimeMs };
+  if (isActivityFile(path)) return { path, kind: 'aktivitetsfil', count: 1, directCount: 1, mtimeMs: st.mtimeMs };
   if (!/\.zip$/i.test(path)) return null;
   const source = await openSource(path).catch(() => null);
   if (!source) return null;
   try {
     if (!findActivitiesCsv(source)) return null;
-    return { path, kind: 'zip', count: source.list().filter(isActivityFile).length, mtimeMs: st.mtimeMs };
+    const count = source.list().filter(isActivityFile).length;
+    return { path, kind: 'zip', count, directCount: count, mtimeMs: st.mtimeMs };
   } finally {
     await source.close();
   }
+}
+
+/**
+ * Mapper der skannes efter eksporter.
+ *
+ * `~/Downloads` og `~/Desktop` er valgt af vilje: det er der folk
+ * lander en hentet zip i. `USERPROFILE` dækker Windows, hvor
+ * download-mappen ofte hedder `Downloads` men ikke altid ligger
+ * under `homedir()`.
+ *
+ * Én funktion for begge vege: den interaktive vælger OG `--find`.
+ * Ellers kan de to komme i utakt, og en agent ville få et andet
+ * sæt kilder end brugeren.
+ */
+export function searchDirs(): string[] {
+  const home = homedir();
+  const dirs = [process.cwd(), join(home, 'Downloads'), join(home, 'Desktop')];
+  const profile = process.env.USERPROFILE;
+  if (profile) dirs.push(join(profile, 'Downloads'), join(profile, 'Desktop'));
+  return dirs;
 }
 
 /**
@@ -107,11 +146,7 @@ async function classify(
  * giver en dansk fejl.
  */
 export async function pickSource(): Promise<string | null> {
-  const candidates = await discoverSources([
-    process.cwd(),
-    join(homedir(), 'Downloads'),
-    join(homedir(), 'Desktop'),
-  ]);
+  const candidates = await discoverSources(searchDirs());
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     for (let attempt = 0; attempt < 3; attempt++) {

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { parseActivityBuffer, type Track } from './activity.ts';
 import { analyseRun } from './analysis.ts';
 import { mapColumns } from './columns.ts';
 import { parseCsv } from './csv.ts';
 import { renderMarkdown, type DigestInput, type DigestedRun } from './digest.ts';
 import { renderAgent } from './agent.ts';
-import { pickSource } from './interactive.ts';
+import { discoverSources, pickSource, searchDirs, type Candidate } from './interactive.ts';
 import { collectActivityFiles, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
 import { type ExportSource, findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
 import { type ActivityRow, toActivities } from './strava.ts';
@@ -38,6 +39,7 @@ const HELP = `strava-digest — aktivitetsfiler eller Strava-eksport (zip) -> ko
   --detail N      antal nyeste løb der får fuld split-opdeling (default 10)
   --all           tag alle aktivitetstyper med, ikke kun løb
   --list          vis kun indekset af aktiviteter
+  --find          find mulige eksporter og print dem som stier (én pr. linje)
   --out FIL       skriv til fil i stedet for stdout
   --json          maskinlæsbar JSON i stedet for digest
   --format md     menneskelæsbar Markdown i stedet for agent-format
@@ -48,6 +50,10 @@ const HELP = `strava-digest — aktivitetsfiler eller Strava-eksport (zip) -> ko
 Standardformatet er et agent-format: én maskinlæsbar linje pr. løb med
 alle felter, en ugeoversigt og en SCHEMA-sektion, så en LLM kan læse
 hele eksporten uden at gætte, hvad felterne betyder.
+
+--find scanner de samme steder som den interaktive vælger og printer
+én sti pr. linje, så et script eller en agent kan finde eksporten
+uden at parse en menneskelæsbar liste.
 
 Kilder:
   zip eller mappe med activities.csv   fuld Strava bulk-eksport
@@ -69,6 +75,11 @@ async function main(): Promise<number> {
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(HELP);
     return 0;
+  }
+  // --find skal virke uden en sti og uden en terminal: en agent bruger
+  // det til at lokalisere eksporten, før den kører værktøjet.
+  if (argv.includes('--find')) {
+    return findSources();
   }
   if (!argv.length) {
     if (!process.stdin.isTTY) {
@@ -118,6 +129,38 @@ async function main(): Promise<number> {
   } finally {
     await source.close();
   }
+}
+
+/**
+ * Find mulige eksporter og print dem som stier, én pr. linje.
+ *
+ * Uden denne må en agent gætte stier eller parse den interaktive
+ * vælgers tekst. Outputtet er derfor rent maskinlæsbart: ingen
+ * overskrifter, ingen nummerering — kun stier, én pr. linje.
+ * Exit-kode 0 når der blev fundet noget, 1 når der ikke gjorde.
+ */
+async function findSources(): Promise<number> {
+  const candidates = await discoverSources(searchDirs());
+  // En agent vil se den RIGTIGE eksport først: en zip eller en mappe med
+  // activities.csv, og helst en hvor filerne ligger lige i mappen. MAPPER
+  // med filer kun i undermapper er rod og springes over — de er
+  // sjældent den eksport brugeren leder efter.
+  const usable = candidates.filter(
+    (c) => c.kind === 'zip' || c.kind === 'csv-mappe' || c.kind === 'aktivitetsfil' || c.directCount > 0,
+  );
+  const list = usable.length ? usable : candidates;
+  // Fuld eksport først, derefter efter filtype — ikke efter mtime, som
+  // rækkerfølgen i den interaktive vælger bruger.
+  const rank: Record<Candidate['kind'], number> = {
+    zip: 0,
+    'csv-mappe': 1,
+    aktivitetsmappe: 2,
+    aktivitetsfil: 3,
+  };
+  for (const c of [...list].sort((a, b) => rank[a.kind]! - rank[b.kind]! || b.count - a.count)) {
+    console.log(c.path);
+  }
+  return list.length ? 0 : 1;
 }
 
 /* ------------------------------------------------------ bulk (uændret sti) */
