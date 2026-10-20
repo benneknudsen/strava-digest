@@ -49,9 +49,15 @@ const ALIASES: Record<Field, string[]> = {
   maxCadence: ['max cadence', 'maks kadence'],
   avgWatts: ['average watts', 'gennemsnitlig watt', 'gns watt'],
   relativeEffort: ['relative effort', 'relativ indsats', 'relativ effort'],
-  elevationGain: ['elevation gain', 'hojdeforogelse', 'stigning', 'hoejdeforoegelse'],
+  elevationGain: [
+    'elevation gain',
+    'hojdeforogelse',
+    'stigning',
+    'hoejdeforoegelse',
+    'samlet stigning',
+  ],
   calories: ['calories', 'kalorier'],
-  gear: ['activity gear', 'udstyr', 'gear'],
+  gear: ['activity gear', 'aktivitetsudstyr', 'aktivitet udstyr', 'udstyr', 'gear'],
   filename: ['filename', 'filnavn', 'fil'],
   avgSpeed: ['average speed', 'gennemsnitshastighed', 'gennemsnitlig hastighed'],
   temperature: ['weather temperature', 'temperatur', 'vejr temperatur'],
@@ -240,7 +246,11 @@ function build(
   if (ampm === 'pm' && h < 12) h += 12;
   if (ampm === 'am' && h === 12) h = 0;
 
-  const d = new Date(year, month, day, h, Number(minute), Number(second ?? 0));
+  // Eksportens tidsstempler er UTC — bekræftet mod FIL- og GPX-filerne i
+  // samme arkiv, hvor de har præcis samme værdi som sessionens start_time.
+  // Derfor tolkes datoen som UTC. Gengivelsen i digesten sker så i
+  // maskinens lokale zone, altså løberens egen klokke.
+  const d = new Date(Date.UTC(year, month, day, h, Number(minute), Number(second ?? 0)));
   return Number.isNaN(d.getTime()) ? null : d;
 }
 

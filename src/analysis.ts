@@ -47,7 +47,13 @@ export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): Run
   const last = pts[pts.length - 1];
   const movingSec =
     first && last ? Math.max(0, (last.t.getTime() - first.t.getTime()) / 1000 - stops.sec) : 0;
-  const distanceM = last?.distM ?? 0;
+  // Sessionens totaldistance er det autoritative tal; det sidste punkt
+  // kan mangle distance (Strava skriver den kun i hvert andet punkt).
+  const lastDist = last?.distM;
+  const distanceM =
+    track.sessionDistanceM != null && track.sessionDistanceM > 0
+      ? track.sessionDistanceM
+      : (lastDist ?? 0);
 
   const hrs = pts.map((p) => p.hr).filter((h): h is number => h != null && h > 0);
   const cads = pts.map((p) => p.cad).filter((c): c is number => c != null && c > 0);

@@ -9,7 +9,7 @@ import { renderMarkdown, type DigestInput, type DigestedRun } from './digest.ts'
 import { pickSource } from './interactive.ts';
 import { collectActivityFiles, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
 import { type ExportSource, findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
-import { toActivities } from './strava.ts';
+import { type ActivityRow, toActivities } from './strava.ts';
 import { resolveZoneConfig } from './zones.ts';
 
 interface Args {
@@ -154,16 +154,47 @@ async function runBulk(
     }
   }
 
+  // Baseline: alle løb i vinduet, ikke kun de løb der vises i digesten.
+  // Ellers er "baseline" bare en gentagelse af digestens egen liste.
+  const newest = pool[0]?.date;
+  const baselinePool = newest
+    ? pool.filter(
+        (a) =>
+          a.date.getTime() > newest.getTime() - args.baselineDays * 86_400_000 &&
+          a.date.getTime() <= newest.getTime(),
+      )
+    : [];
+  const baselineRuns: DigestedRun[] = [];
+  for (const row of baselinePool) {
+    const entry = resolveActivityEntry(source, found.root, row.filename);
+    if (!entry) continue;
+    try {
+      const track = parseActivityBuffer(entry, await source.read(entry));
+      baselineRuns.push({
+        row,
+        analysis: analyseRun(track, resolveZoneConfig(args.maxHr, track.zones)),
+      });
+    } catch {
+      // Et ubrugeligt baseline-løb springes over; det er ikke fatalt.
+    }
+  }
+
   const contextText = await readContext(args.context);
+  const observedMaxHr = observedMaxHeartRate(activities);
   const input = {
     sourceLabel: source.label,
     activitiesInExport: activities.length,
     runs,
+    baselineRuns,
     baselineDays: args.baselineDays,
     unmatchedHeaders: map.unmatched,
     contextText,
     generatedAt: new Date(),
     poolLabel: args.all ? 'Aktiviteter' : 'Løb',
+    zoneHint:
+      args.maxHr == null && observedMaxHr != null
+        ? `observeret puls-maks i eksporten er ${observedMaxHr} — brug --max-hr ${observedMaxHr}`
+        : undefined,
     hostNote: map.unmatched.length
       ? 'Tilføj aliasser i src/columns.ts hvis et felt mangler i digesten.'
       : undefined,
@@ -264,6 +295,7 @@ async function runLoose(
       : `${input} (fil) · metadata læst fra filen`,
     activitiesInExport: files.length,
     runs: chosen,
+    baselineRuns: usable.map((e) => e.run!),
     baselineDays: args.baselineDays,
     unmatchedHeaders: [] as string[],
     contextText: await readContext(args.context),
@@ -325,6 +357,17 @@ async function readContext(path: string): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/**
+ * Højeste puls der er observeret i eksporten. Det er ikke et zonegrundlag
+ * — det er blot det bedste bud på brugerens max-puls, når urets egen
+ * zonekonfiguration mangler i filerne. Vises som et forslag, aldrig som
+ * en sandhed.
+ */
+function observedMaxHeartRate(activities: ActivityRow[]): number | null {
+  const values = activities.map((a) => a.maxHr).filter((v): v is number => v != null && v > 0);
+  return values.length ? Math.max(...values) : null;
 }
 
 function parseMaxHr(value: string): number {

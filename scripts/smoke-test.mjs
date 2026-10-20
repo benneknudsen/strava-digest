@@ -6,14 +6,14 @@ import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { analyseRun } from '../src/analysis.ts';
-import { parseActivityBuffer } from '../src/activity.ts';
-import { mapColumns } from '../src/columns.ts';
+import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
+import { mapColumns, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
 import { renderMarkdown } from '../src/digest.ts';
 import { discoverSources } from '../src/interactive.ts';
 import { isActivityFile, rowFromTrack } from '../src/loose.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
-import { toActivities } from '../src/strava.ts';
+import { normalizeType, RUN_TYPES, toActivities } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'strava-digest-test-'));
@@ -355,6 +355,71 @@ try {
 
   const boundsOnlyCfg = resolveZoneConfig(null, { boundaries: [114, 133, 152, 171] });
   check('kun FIT-grænser: max-puls udledes af øverste grænse', boundsOnlyCfg, (v) => v?.source === 'fit' && v?.maxHr === 190);
+
+  /* ---- fund fra rigtig Strava-eksport (2026-10-20) ---- */
+
+  // 1) Strava oversætter typerne: "Run" bliver "Løb". Uden normalisering
+  //    faldt alle 195 løb ud af puljen, og digesten viste 5 "løb" i stedet.
+  check('dansk type "Løb" normaliseres til løb', normalizeType('Løb'), (v) => v === 'lob');
+  check('dansk type "Løb" tælles som løb', RUN_TYPES.includes(normalizeType('Løb')), (v) => v === true);
+  check('norsk type "Løp" tælles ikke som løb', RUN_TYPES.includes(normalizeType('Løp')), (v) => v === false);
+  check('svensk typografi "Löp" tælles ikke som løb', RUN_TYPES.includes(normalizeType('Löp')), (v) => v === false);
+  check('cykeltur tælles ikke som løb', normalizeType('Virtuel cykeltur') === 'lob', (v) => v === false);
+
+  // 2) Eksportens datoer er UTC — bekræftet mod FIT/GPX i samme arkiv.
+  //    Som lokal tid kom turen to timer for tidigt i digesten.
+  const utcDate = parseDate('16. okt. 2026, 08.18.29');
+  check('eksportens dato tolkes som UTC', utcDate?.toISOString(), (v) => v === '2026-10-16T08:18:29.000Z');
+  check('lokal gengivelse følger maskinens zone', utcDate?.getHours(), (v) => v === new Date('2026-10-16T08:18:29Z').getHours());
+  const isoDate = parseDate('2026-10-16T08:18:29Z');
+  check('ISO-dato tolkes uændret', isoDate?.toISOString(), (v) => v === '2026-10-16T08:18:29.000Z');
+
+  // 3) Stravas FIT-filer har hvert felt i sin egen beseg: distance, puls
+  //    og højde står i hver deres post med samme tidspunkt. Uden
+  //    sammenlægning forsvinder de, og turen ender som 0,00 km.
+  const split = pointsFromFitRecords([
+    { timestamp: '2026-10-16T08:00:00.000Z', distance: 0 },
+    { timestamp: '2026-10-16T08:00:00.000Z', heart_rate: 120 },
+    { timestamp: '2026-10-16T08:00:00.000Z', enhanced_altitude: 10 },
+    { timestamp: '2026-10-16T08:00:01.000Z', distance: 1000 },
+    { timestamp: '2026-10-16T08:00:01.000Z', heart_rate: 130 },
+    { timestamp: '2026-10-16T08:00:02.000Z', distance: 2000 },
+    { timestamp: '2026-10-16T08:00:02.000Z', enhanced_altitude: 12 },
+  ]);
+  check('FIT-felter slås sammen pr. tidspunkt', split.length, (v) => v === 3);
+  check('puls overføres fra sin egen besked', split[0]?.hr, (v) => v === 120);
+  check('højde læses fra enhanced_altitude', split[2]?.altM, (v) => v === 12);
+  check('distance interpoleres mellem målinger', split[1]?.distM, (v) => v === 1000);
+  check('sidste distance bevares', split[2]?.distM, (v) => v === 2000);
+
+  // 4) Dansk overskrift "Aktivitetsudstyr" (sko) må ikke forveksles med
+  //    "Udstyr" (cykel-id) — ellers vises 30723737.0 som udstyr.
+  const daCsv = parseCsv(
+    [
+      'Aktivitets-ID,Aktivitetsdato,Aktivitetsnavn,Aktivitetstype,Distance,Maks. puls,Gennemsnitlig puls,Relativ indsats,Samlet stigning,Udstyr,Aktivitetsudstyr,Filnavn',
+      '1001,"12. okt. 2026, 06.32",Lang tur,Løb,10.0,174,156,92,41,30723737.0,Nike Vomero Plus,Run-1001.gpx',
+    ].join('\n'),
+  );
+  const daMap = mapColumns(daCsv);
+  const daRows = toActivities(daCsv, daMap);
+  check('dansk "Aktivitetsudstyr" giver sko, ikke cykel-id', daRows[0]?.gear, (v) => v === 'Nike Vomero Plus');
+  check('dansk "Samlet stigning" mappes som stigning', daRows[0]?.elevationGain, (v) => v === 41);
+  check('dansk "Løb" er et løb', daRows[0]?.isRun, (v) => v === true);
+  check('dansk "Distance" i km tolkes som meter', daRows[0]?.distanceM, (v) => v === 10_000);
+
+  // 5) Baseline skal dække hele vinduet, ikke kun de løb der vises.
+  const wide = renderMarkdown({
+    sourceLabel: 'test',
+    activitiesInExport: activities.length,
+    runs: [{ row: activities[0], analysis: a }],
+    baselineRuns: [0, 1, 2].map((i) => ({ row: activities[i], analysis: a })),
+    baselineDays: 28,
+    unmatchedHeaders: [],
+    contextText: '',
+    generatedAt: new Date('2026-10-13T08:00:00'),
+    poolLabel: 'Løb',
+  });
+  check('baseline tæller hele vinduet', wide.includes('3 løb'), (v) => v === true);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });
