@@ -9,6 +9,19 @@ license: MIT
 
 Svar på træningsspørgsmål ud fra brugerens løbdata, læst via `strava-digest`.
 
+## When to Use
+
+Brug denne skill når brugeren spørger om:
+
+- sine løb, sin træning, sin kondition eller sit løbhistorik
+- et konkret løb (pace, puls, zoner, splits, hvordan det gik)
+- tendenser over tid (volumen, belastning, form, pauser mellem løb)
+- hvilken træning der passer til planen, eller om et pas levede op til planen
+- en træningsplan der skal sammenlignes med det faktiske løbhistorik
+
+Brug den **ikke** når spørgsmålet ikke kræver brugerens data — generelle
+træningsråd, løbeting i andre lande, opsætning af et ur.
+
 ## Værktøjet
 
 `strava-digest` er et lokalt Node CLI der læser brugerens **egen Strava
