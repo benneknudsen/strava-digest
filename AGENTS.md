@@ -6,7 +6,7 @@ Instructions for AI agents working in this repository.
 
 `strava-digest` reads the user's **own Strava bulk export** and writes a
 compact, machine-readable digest. The point is to give an agent the whole
-training history for ~14,500 tokens instead of ~22 MB of raw GPS data.
+training history for ~14,000 tokens instead of ~22 MB of raw GPS data.
 
 **Never touch the Strava API.** The tool only reads files the user has
 downloaded themselves. It is an export-and-interpret thing, not an API client.
@@ -50,6 +50,7 @@ Before you commit:
 ```bash
 npm test          # scripts/smoke-test.mjs
 npx tsc --noEmit  # typecheck
+npm run build     # tsc -> dist/, which is what the command runs
 ```
 
 Both must be green. CI also runs on Linux, macOS and Windows with Node 22 and
@@ -70,6 +71,7 @@ Both must be green. CI also runs on Linux, macOS and Windows with Node 22 and
 - `src/activity.ts` — the activity model
 - `src/source.ts` — what a path resolves to: zip, folder, single file
 - `src/zones.ts` — zone boundaries and the max-HR fallback chain
+- `bin/strava-digest.js` — the launcher for the `strava-digest` command
 - `scripts/smoke-test.mjs` — the whole test suite
 - `scripts/measure-compression.mjs` — measures the compression on a real export
 - `skills/strava-digest/SKILL.md` — the ready-to-install agent skill
