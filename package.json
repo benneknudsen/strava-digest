@@ -1,14 +1,28 @@
 {
   "name": "strava-digest",
   "version": "0.1.0",
-  "description": "Strava bulk-export -> traeningsdigest til en agent",
+  "description": "Turns a Strava bulk export into one compact training digest an agent can read: splits, HR drift, pace consistency, zones, training load, trends.",
   "scripts": {
     "test": "node scripts/smoke-test.mjs",
     "start": "node src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "measure": "node scripts/measure-compression.mjs"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "strava",
+    "running",
+    "training",
+    "digest",
+    "llm",
+    "agent",
+    "fit",
+    "gpx"
+  ],
+  "author": "Benjamin Knudsen",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benneknudsen/strava-digest.git"
+  },
   "license": "MIT",
   "type": "module",
   "dependencies": {

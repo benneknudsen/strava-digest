@@ -98,7 +98,7 @@ Users can start from `context.example.md`.
 
 ## Start small
 
-On a large export the digest is ~14,900 tokens. That is fine, but for a
+On a large export the digest is ~14,500 tokens. That is fine, but for a
 first look, or when the model is slow, narrow it:
 
 ```bash
@@ -138,7 +138,7 @@ matter, ask.
 ## What not to do
 
 - **Never hand the raw data to the model.** The digest is the whole point: a
-  196-run export is ~14,900 tokens against ~28 MB of raw data.
+  196-run export is ~51 kB (~14,500 tokens) against ~22 MB of raw data.
 - **Never invent numbers.** A missing field shows as `-`. If you say there is
   no data, say so — do not guess.
 - **Do not edit the user's `context.md`.** It is their own context.

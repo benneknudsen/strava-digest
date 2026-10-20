@@ -344,7 +344,9 @@ try {
     hrErr = err;
   }
   check('ugyldig --max-hr fejler', hrErr !== null, (v) => v === true);
-  check('ugyldig --max-hr giver dansk besked', String(hrErr?.stderr ?? ''), (v) => v.includes('positivt heltal'));
+  check('ugyldig --max-hr giver engelsk besked', String(hrErr?.stderr ?? ''), (v) =>
+    v.includes('positive integer') && !v.includes('positivt heltal'),
+  );
 
   /* ---- løse aktivitetsfiler (Del A) ---- */
 

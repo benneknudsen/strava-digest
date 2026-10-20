@@ -219,7 +219,7 @@ async function runBulk(
   for (const row of pool) {
     const entry = resolveActivityEntry(source, found.root, row.filename);
     if (!entry) {
-      analysed.push({ row, analysis: null, error: `fil ikke fundet i arkivet (${row.filename})` });
+      analysed.push({ row, analysis: null, error: `file not found in the archive (${row.filename})` });
       continue;
     }
     try {
@@ -417,7 +417,7 @@ async function emitDigest(input: DigestInput, args: Args): Promise<number> {
     const target = resolve(args.out);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, output, 'utf8');
-    console.error(`skrev ${target} (${output.length} tegn)`);
+    console.error(`wrote ${target} (${output.length} bytes)`);
   } else {
     process.stdout.write(output);
   }
@@ -482,7 +482,7 @@ function observedMaxHeartRate(activities: ActivityRow[]): number | null {
 function parseMaxHr(value: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
-    throw new Error(`ugyldig --max-hr: "${value}" — angiv et positivt heltal, fx --max-hr 190`);
+    throw new Error(`invalid --max-hr: "${value}" — give a positive integer, e.g. --max-hr 190`);
   }
   return n;
 }

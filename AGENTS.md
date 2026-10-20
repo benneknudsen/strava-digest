@@ -6,7 +6,7 @@ Instructions for AI agents working in this repository.
 
 `strava-digest` reads the user's **own Strava bulk export** and writes a
 compact, machine-readable digest. The point is to give an agent the whole
-training history for ~14,900 tokens instead of ~28 MB of raw GPS data.
+training history for ~14,500 tokens instead of ~22 MB of raw GPS data.
 
 **Never touch the Strava API.** The tool only reads files the user has
 downloaded themselves. It is an export-and-interpret thing, not an API client.
@@ -31,8 +31,11 @@ means.
 - **Never hand the raw data to the model.** The digest is the whole point.
 - **Never invent numbers.** A missing field shows as `-`.
 - **Max heart rate comes from the user.** Strava's export has no zone
-  configuration; do not guess a value. Run with `--max-hr <value>` once the
-  user has given one.
+  configuration. Without `--max-hr` the tool falls back to the highest heart
+  rate in the export and labels it `source=export-observation`; that is a
+  guess, usually a single spike, so it is often higher than a real max and
+  makes training look easier than it is. Run with `--max-hr <value>` once the
+  user has given one, and never present the fallback as the user's max.
 - **`context.md` belongs to the user.** It is embedded in the digest and is
   gitignored, because the content is personal. Do not write to it.
 - **`media/` is not data.** It is the images and videos from the activities,
@@ -63,5 +66,10 @@ Both must be green. CI also runs on Linux, macOS and Windows with Node 22 and
 - `src/columns.ts` — the column alias table (one place per language)
 - `src/loose.ts` — loose activity files
 - `src/strava.ts` — CSV reading and column mapping
+- `src/csv.ts` — CSV parsing
+- `src/activity.ts` — the activity model
+- `src/source.ts` — what a path resolves to: zip, folder, single file
+- `src/zones.ts` — zone boundaries and the max-HR fallback chain
 - `scripts/smoke-test.mjs` — the whole test suite
+- `scripts/measure-compression.mjs` — measures the compression on a real export
 - `skills/strava-digest/SKILL.md` — the ready-to-install agent skill

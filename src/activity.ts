@@ -50,7 +50,7 @@ export function parseActivityBuffer(filename: string, raw: Buffer): Track {
   if (ext.includes('.fit')) return parseFit(buf);
   if (ext.endsWith('.gpx')) return parseGpx(buf.toString('utf8'));
   if (ext.endsWith('.tcx')) return parseTcx(buf.toString('utf8'));
-  throw new Error(`ukendt aktivitetsformat: ${filename}`);
+  throw new Error(`unknown activity format: ${filename}`);
 }
 
 /* -------------------------------------------------------------------- FIT */
