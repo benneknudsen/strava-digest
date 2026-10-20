@@ -26,7 +26,32 @@ export interface ActivityRow {
   isRun: boolean;
 }
 
-export const RUN_TYPES = ['run', 'running', 'trailrun', 'trail run', 'virtualrun', 'virtual run', 'lob', 'loeb'];
+export const RUN_TYPES = [
+  'run',
+  'running',
+  'trailrun',
+  'trail run',
+  'virtualrun',
+  'virtual run',
+  'lob',
+  'loeb',
+  'lope',
+];
+
+/**
+ * Strava oversætter aktivitetstyperne til kontosprog: "Run" bliver "Løb".
+ * Sprogtegnene skal normaliseres, ellers falder typen ud af listen og
+ * alle 195 løb i eksporten forsvinder fra digesten.
+ */
+export function normalizeType(type: string): string {
+  return type
+    .toLowerCase()
+    .replace(/æ/g, 'ae')
+    .replace(/ø/g, 'o')
+    .replace(/å/g, 'a')
+    .replace(/[^a-z ]/g, '')
+    .trim();
+}
 
 export function toActivities(table: CsvTable, map: ColumnMap): ActivityRow[] {
   const out: ActivityRow[] = [];
@@ -50,7 +75,7 @@ export function toActivities(table: CsvTable, map: ColumnMap): ActivityRow[] {
       calories: num(row, map, 'calories'),
       gear: raw(row, map, 'gear'),
       filename,
-      isRun: RUN_TYPES.includes(type.toLowerCase().replace(/[^a-z ]/g, '').trim()),
+      isRun: RUN_TYPES.includes(normalizeType(type)),
     });
   }
   out.sort((a, b) => b.date.getTime() - a.date.getTime());

@@ -27,6 +27,13 @@ export interface Track {
   source: 'fit' | 'gpx' | 'tcx';
   /** true when per-point distance had to be derived from GPS positions */
   distanceDerived: boolean;
+  /**
+   * Sessionens samlede distance i meter, når filen oplyser den.
+   * Strava skriver FIT-filerne selv, og de kan have et ufuldstændigt
+   * distance-felt i hvert andet punkt — session-totalen er så det
+   * autoritative tal, ikke det sidste punkt.
+   */
+  sessionDistanceM?: number;
   /** zonedata fra filen — kun sat når filen faktisk indeholder den */
   zones?: {
     maxHr?: number;
@@ -37,10 +44,12 @@ export interface Track {
 
 export function parseActivityBuffer(filename: string, raw: Buffer): Track {
   const lower = filename.toLowerCase();
+  // Suffixet skal læses FØR `.gz` pakkes ud: `tur.tcx.gz` er stadig en TCX.
+  const ext = lower.replace(/\.gz$/, '');
   const buf = lower.endsWith('.gz') ? maybeGunzip(raw) : raw;
-  if (lower.includes('.fit')) return parseFit(buf);
-  if (lower.endsWith('.gpx')) return parseGpx(buf.toString('utf8'));
-  if (lower.endsWith('.tcx')) return parseTcx(buf.toString('utf8'));
+  if (ext.includes('.fit')) return parseFit(buf);
+  if (ext.endsWith('.gpx')) return parseGpx(buf.toString('utf8'));
+  if (ext.endsWith('.tcx')) return parseTcx(buf.toString('utf8'));
   throw new Error(`ukendt aktivitetsformat: ${filename}`);
 }
 
@@ -68,21 +77,7 @@ function parseFit(buf: Buffer): Track {
 
 function trackFromFit(data: any): Track {
   const rawRecords: any[] = data.records ?? [];
-  const points: TrackPoint[] = [];
-  for (const r of rawRecords) {
-    const t = r.timestamp ? new Date(r.timestamp) : null;
-    if (!t || Number.isNaN(t.getTime())) continue;
-    points.push({
-      t,
-      distM: finite(r.distance),
-      speedMps: finite(r.speed),
-      hr: finite(r.heart_rate),
-      cad: finite(r.cadence),
-      altM: finite(r.altitude),
-      lat: finite(r.position_lat),
-      lon: finite(r.position_long),
-    });
-  }
+  const points = pointsFromFitRecords(rawRecords);
   const sessions: any[] = data.sessions ?? [];
   const session = sessions[0] ?? {};
   const laps: Lap[] = (data.laps ?? []).map((l: any) => ({
@@ -98,8 +93,126 @@ function trackFromFit(data: any): Track {
     sport: typeof session.sport === 'string' ? session.sport : 'unknown',
     source: 'fit',
     distanceDerived: false,
+    sessionDistanceM: finite(session.total_distance),
     zones: fitZones(data),
   };
+}
+
+/**
+ * Strava skriver de eksporterede FIT-filer selv, og de ligner ikke en
+ * watches egen fil: hvert felt kommer i sin egen besked, så det samme
+ * tidspunkt står flere gange med hver sit felt. Parserens `list`-tilstand
+ * giver derfor én post pr. besked — ikke én pr. måling. Uden at slå
+ * beskederne sammen pr. tidspunkt forsvinder distance, puls og højde
+ * (de ligger i hver deres besked), og turen ender som 0,00 km.
+ *
+ * Efter sammenlægning er `distance` kumulativ og står kun i hvert andet
+ * punkt, så den interpoleres lineært mellem kendte målinger. Puls og
+ * fart står også sporadisk og føres derfor frem (seneste værdi gælder).
+ */
+export function pointsFromFitRecords(rawRecords: any[]): TrackPoint[] {
+  interface Merged {
+    t: Date;
+    dist?: number;
+    speed?: number;
+    hr?: number;
+    cad?: number;
+    alt?: number;
+    lat?: number;
+    lon?: number;
+  }
+
+  const byTime = new Map<number, Merged>();
+  for (const r of rawRecords) {
+    const t = r?.timestamp ? new Date(r.timestamp) : null;
+    if (!t || Number.isNaN(t.getTime())) continue;
+    const key = t.getTime();
+    let m = byTime.get(key);
+    if (!m) {
+      m = { t };
+      byTime.set(key, m);
+    }
+    const dist = finite(r.distance);
+    if (dist != null) m.dist = dist;
+    const speed = finite(r.speed);
+    if (speed != null) m.speed = speed;
+    const hr = finite(r.heart_rate);
+    if (hr != null) m.hr = hr;
+    const cad = finite(r.cadence);
+    if (cad != null) m.cad = cad;
+    // Strava skriver højden som enhanced_altitude; watches skriver altitude.
+    const alt = finite(r.enhanced_altitude) ?? finite(r.altitude);
+    if (alt != null) m.alt = alt;
+    const lat = finite(r.position_lat);
+    if (lat != null) m.lat = lat;
+    const lon = finite(r.position_long);
+    if (lon != null) m.lon = lon;
+  }
+
+  const merged = [...byTime.values()].sort((a, b) => a.t.getTime() - b.t.getTime());
+  if (!merged.length) return [];
+
+  // Kumulativ distance: interpolér mellem de målinger der findes.
+  const known: number[] = [];
+  merged.forEach((m, i) => {
+    if (m.dist != null) known.push(i);
+  });
+  if (known.length) {
+    for (let i = 0; i < merged.length; i++) {
+      const m = merged[i]!;
+      if (m.dist != null) continue;
+      let lo = -1;
+      let hi = -1;
+      for (const k of known) {
+        if (k < i) lo = k;
+        else if (hi < 0) hi = k;
+      }
+      if (lo < 0) {
+        m.dist = merged[hi]!.dist;
+      } else if (hi < 0) {
+        m.dist = merged[lo]!.dist;
+      } else {
+        const a = merged[lo]!;
+        const b = merged[hi]!;
+        const span = b.t.getTime() - a.t.getTime();
+        const f = span > 0 ? (m.t.getTime() - a.t.getTime()) / span : 0;
+        m.dist = a.dist! + (b.dist! - a.dist!) * f;
+      }
+    }
+  }
+
+  // Puls og fart føres frem: seneste måling gælder indtil den næste.
+  let lastHr: number | undefined;
+  let lastSpeed: number | undefined;
+  let lastCad: number | undefined;
+  let lastAlt: number | undefined;
+  for (const m of merged) {
+    if (m.hr != null) lastHr = m.hr;
+    else m.hr = lastHr;
+    if (m.speed != null) lastSpeed = m.speed;
+    else m.speed = lastSpeed;
+    if (m.cad != null) lastCad = m.cad;
+    else m.cad = lastCad;
+    if (m.alt != null) lastAlt = m.alt;
+    else m.alt = lastAlt;
+  }
+
+  const points: TrackPoint[] = merged.map((m) => ({
+    t: m.t,
+    distM: m.dist,
+    speedMps: m.speed,
+    hr: m.hr,
+    cad: m.cad,
+    altM: m.alt,
+    lat: m.lat,
+    lon: m.lon,
+  }));
+  if (!known.length) {
+    // Ingen distance i filen: udled den af GPS'en.
+    fillDistances(points);
+    deriveSpeeds(points);
+  }
+  return points;
 }
 
 /**

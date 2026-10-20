@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { parseActivityBuffer, type Track } from './activity.ts';
 import { analyseRun } from './analysis.ts';
 import { mapColumns } from './columns.ts';
 import { parseCsv } from './csv.ts';
 import { renderMarkdown, type DigestInput, type DigestedRun } from './digest.ts';
-import { pickSource } from './interactive.ts';
+import { renderAgent } from './agent.ts';
+import { discoverSources, pickSource, searchDirs, type Candidate } from './interactive.ts';
 import { collectActivityFiles, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
 import { type ExportSource, findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
-import { toActivities } from './strava.ts';
+import { type ActivityRow, toActivities } from './strava.ts';
 import { resolveZoneConfig } from './zones.ts';
 
 interface Args {
@@ -22,6 +24,10 @@ interface Args {
   baselineDays: number;
   context: string;
   maxHr: number | null;
+  /** antal løb der får fuld split-opdeling i agent-formatet */
+  detail: number;
+  /** 'agent' (standard) eller 'md' */
+  format: 'agent' | 'md';
 }
 
 const HELP = `strava-digest — aktivitetsfiler eller Strava-eksport (zip) -> kompakt træningsdigest
@@ -29,14 +35,25 @@ const HELP = `strava-digest — aktivitetsfiler eller Strava-eksport (zip) -> ko
   strava-digest <eksport.zip|mappe|aktivitetsfil|aktivitetsmappe> [flag]
   strava-digest            interaktiv vælger, når du kører i en terminal
 
-  --last N        antal løb i digesten (default 5)
+  --last N        antal løb i digesten (default: alle)
+  --detail N      antal nyeste løb der får fuld split-opdeling (default 10)
   --all           tag alle aktivitetstyper med, ikke kun løb
   --list          vis kun indekset af aktiviteter
+  --find          find mulige eksporter og print dem som stier (én pr. linje)
   --out FIL       skriv til fil i stedet for stdout
-  --json          maskinlæsbar JSON i stedet for Markdown
-  --days N        baseline-vindue i dage (default 28)
+  --json          maskinlæsbar JSON i stedet for digest
+  --format md     menneskelæsbar Markdown i stedet for agent-format
+  --days N        sammenligningsvindue i dage (default 28)
   --max-hr N      max-puls til zonefordeling (Z1–Z5 = 50–100 % af max)
   --context FIL   kontekstfil der flettes ind (default ./context.md hvis den findes)
+
+Standardformatet er et agent-format: én maskinlæsbar linje pr. løb med
+alle felter, en ugeoversigt og en SCHEMA-sektion, så en LLM kan læse
+hele eksporten uden at gætte, hvad felterne betyder.
+
+--find scanner de samme steder som den interaktive vælger og printer
+én sti pr. linje, så et script eller en agent kan finde eksporten
+uden at parse en menneskelæsbar liste.
 
 Kilder:
   zip eller mappe med activities.csv   fuld Strava bulk-eksport
@@ -58,6 +75,11 @@ async function main(): Promise<number> {
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(HELP);
     return 0;
+  }
+  // --find skal virke uden en sti og uden en terminal: en agent bruger
+  // det til at lokalisere eksporten, før den kører værktøjet.
+  if (argv.includes('--find')) {
+    return findSources();
   }
   if (!argv.length) {
     if (!process.stdin.isTTY) {
@@ -109,6 +131,38 @@ async function main(): Promise<number> {
   }
 }
 
+/**
+ * Find mulige eksporter og print dem som stier, én pr. linje.
+ *
+ * Uden denne må en agent gætte stier eller parse den interaktive
+ * vælgers tekst. Outputtet er derfor rent maskinlæsbart: ingen
+ * overskrifter, ingen nummerering — kun stier, én pr. linje.
+ * Exit-kode 0 når der blev fundet noget, 1 når der ikke gjorde.
+ */
+async function findSources(): Promise<number> {
+  const candidates = await discoverSources(searchDirs());
+  // En agent vil se den RIGTIGE eksport først: en zip eller en mappe med
+  // activities.csv, og helst en hvor filerne ligger lige i mappen. MAPPER
+  // med filer kun i undermapper er rod og springes over — de er
+  // sjældent den eksport brugeren leder efter.
+  const usable = candidates.filter(
+    (c) => c.kind === 'zip' || c.kind === 'csv-mappe' || c.kind === 'aktivitetsfil' || c.directCount > 0,
+  );
+  const list = usable.length ? usable : candidates;
+  // Fuld eksport først, derefter efter filtype — ikke efter mtime, som
+  // rækkerfølgen i den interaktive vælger bruger.
+  const rank: Record<Candidate['kind'], number> = {
+    zip: 0,
+    'csv-mappe': 1,
+    aktivitetsmappe: 2,
+    aktivitetsfil: 3,
+  };
+  for (const c of [...list].sort((a, b) => rank[a.kind]! - rank[b.kind]! || b.count - a.count)) {
+    console.log(c.path);
+  }
+  return list.length ? 0 : 1;
+}
+
 /* ------------------------------------------------------ bulk (uændret sti) */
 
 async function runBulk(
@@ -132,38 +186,79 @@ async function runBulk(
   }
 
   const pool = args.all ? activities : activities.filter((a) => a.isRun);
-  const chosen = pool.slice(0, args.last);
-  if (!chosen.length) {
+  // I agent-formatet er standarden ALLE løb: en coach-agent skal kunne se
+  // hele historikken, ellers kan den ikke finde tendenser. --last kan
+  // stadig begrænse, og da er det et bevidst valg.
+  const limit = args.last > 0 ? args.last : pool.length;
+  if (!pool.length) {
     console.error('Ingen løb fundet i eksporten (prøv --all).');
     return 1;
   }
 
-  const runs: DigestedRun[] = [];
-  for (const row of chosen) {
+  // Alle løb i pool'en analyseres én gang, og resultaterne genbruges til
+  // både digesten og baseline. At analysere to gange ville double-parse
+  // hver fil og gøre hele eksporten unødigt langsom.
+  const analysed: DigestedRun[] = [];
+  for (const row of pool) {
     const entry = resolveActivityEntry(source, found.root, row.filename);
     if (!entry) {
-      runs.push({ row, analysis: null, error: `fil ikke fundet i arkivet (${row.filename})` });
+      analysed.push({ row, analysis: null, error: `fil ikke fundet i arkivet (${row.filename})` });
       continue;
     }
     try {
       const buf = await source.read(entry);
       const track = parseActivityBuffer(entry, buf);
-      runs.push({ row, analysis: analyseRun(track, resolveZoneConfig(args.maxHr, track.zones)) });
+      analysed.push({ row, analysis: analyseRun(track, resolveZoneConfig(args.maxHr, track.zones)) });
     } catch (err) {
-      runs.push({ row, analysis: null, error: err instanceof Error ? err.message : String(err) });
+      analysed.push({ row, analysis: null, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
+  const chosen = analysed.slice(0, limit);
+
+  // Baseline: alle løb i vinduet, ikke kun de løb der vises i digesten.
+  // Ellers er "baseline" bare en gentagelse af digestens egen liste.
+  const newest = pool[0]?.date;
+  const baselineRuns = newest
+    ? analysed.filter(
+        (r) =>
+          r.row.date.getTime() > newest.getTime() - args.baselineDays * 86_400_000 &&
+          r.row.date.getTime() <= newest.getTime(),
+      )
+    : [];
+
   const contextText = await readContext(args.context);
+  const observedMaxHr = observedMaxHeartRate(activities);
+  const zoneSource: 'flag' | 'fit' | 'eksport-observation' | null =
+    args.maxHr != null ? 'flag' : observedMaxHr != null ? 'eksport-observation' : null;
   const input = {
     sourceLabel: source.label,
     activitiesInExport: activities.length,
-    runs,
+    runsTotal: pool.length,
+    runs: chosen,
+    baselineRuns,
     baselineDays: args.baselineDays,
     unmatchedHeaders: map.unmatched,
     contextText,
     generatedAt: new Date(),
     poolLabel: args.all ? 'Aktiviteter' : 'Løb',
+    maxHr: args.maxHr ?? observedMaxHr ?? null,
+    maxHrSource: zoneSource,
+    notes: [
+      ...(map.unmatched.length
+        ? ['Kolonner uden mapping: ' + map.unmatched.join(' · ')]
+        : []),
+      ...(args.maxHr == null && observedMaxHr != null
+        ? [
+            `max_hr=${observedMaxHr} er det højeste puls-tal i eksporten (observeret), ikke dit ur's egen max-puls. ` +
+              'Stravas bulk-eksport indeholder ikke urets zonekonfiguration, så zonegrænserne er et bedste bud.',
+          ]
+        : []),
+    ],
+    zoneHint:
+      args.maxHr == null && observedMaxHr != null
+        ? `observeret puls-maks i eksporten er ${observedMaxHr} — brug --max-hr ${observedMaxHr}`
+        : undefined,
     hostNote: map.unmatched.length
       ? 'Tilføj aliasser i src/columns.ts hvis et felt mangler i digesten.'
       : undefined,
@@ -240,7 +335,8 @@ async function runLoose(
 
   const runs = usable.map((e) => e.run!);
   const pool = args.all ? runs : runs.filter((r) => r.row.isRun);
-  const chosen = pool.slice(0, args.last);
+  const limit = args.last > 0 ? args.last : pool.length;
+  const chosen = pool.slice(0, limit);
   if (!chosen.length) {
     const skipNote = skipped.length
       ? ` Sprunget over: ${skipped.map((e) => basename(e.file)).join(', ')}.`
@@ -263,12 +359,17 @@ async function runLoose(
       ? `${input} (mappe, ${files.length} aktivitetsfil${files.length === 1 ? '' : 'er'}) · metadata læst fra filerne`
       : `${input} (fil) · metadata læst fra filen`,
     activitiesInExport: files.length,
+    runsTotal: pool.length,
     runs: chosen,
+    baselineRuns: usable.map((e) => e.run!),
     baselineDays: args.baselineDays,
     unmatchedHeaders: [] as string[],
     contextText: await readContext(args.context),
     generatedAt: new Date(),
     poolLabel: args.all ? 'Aktiviteter' : 'Løb',
+    maxHr: args.maxHr ?? null,
+    maxHrSource: args.maxHr != null ? ('flag' as const) : null,
+    notes,
     hostNote: notes.join(' '),
   };
 
@@ -278,7 +379,21 @@ async function runLoose(
 async function emitDigest(input: DigestInput, args: Args): Promise<number> {
   const output = args.json
     ? `${JSON.stringify({ ...input, markdown: renderMarkdown(input) }, null, 2)}\n`
-    : renderMarkdown(input);
+    : args.format === 'md'
+      ? renderMarkdown(input)
+      : renderAgent({
+          sourceLabel: input.sourceLabel,
+          activitiesInExport: input.activitiesInExport,
+          runsTotal: input.runsTotal ?? input.runs.length,
+          runs: input.runs,
+          detailCount: args.detail,
+          baselineDays: input.baselineDays,
+          contextText: input.contextText,
+          generatedAt: input.generatedAt,
+          maxHr: input.maxHr ?? null,
+          maxHrSource: input.maxHrSource ?? null,
+          notes: input.notes ?? [],
+        });
   if (args.out) {
     const target = resolve(args.out);
     await mkdir(dirname(target), { recursive: true });
@@ -293,7 +408,7 @@ async function emitDigest(input: DigestInput, args: Args): Promise<number> {
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     input: '',
-    last: 5,
+    last: 0, // 0 = alle løb
     out: null,
     json: false,
     list: false,
@@ -301,11 +416,14 @@ function parseArgs(argv: string[]): Args {
     baselineDays: 28,
     context: 'context.md',
     maxHr: null,
+    detail: 10,
+    format: 'agent',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const next = () => argv[++i] ?? '';
-    if (a === '--last') args.last = Number(next()) || args.last;
+    if (a === '--last') args.last = Number(next()) || 0;
+    else if (a === '--detail') args.detail = Number(next()) || args.detail;
     else if (a === '--out') args.out = next();
     else if (a === '--context') args.context = next();
     else if (a === '--days') args.baselineDays = Number(next()) || args.baselineDays;
@@ -313,6 +431,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--json') args.json = true;
     else if (a === '--list') args.list = true;
     else if (a === '--all') args.all = true;
+    else if (a === '--format') args.format = next().trim() === 'md' ? 'md' : 'agent';
     else if (!a.startsWith('-') && !args.input) args.input = a;
   }
   if (!args.input) throw new Error('mangler sti til eksport (zip, mappe eller aktivitetsfil)');
@@ -325,6 +444,17 @@ async function readContext(path: string): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/**
+ * Højeste puls der er observeret i eksporten. Det er ikke et zonegrundlag
+ * — det er blot det bedste bud på brugerens max-puls, når urets egen
+ * zonekonfiguration mangler i filerne. Vises som et forslag, aldrig som
+ * en sandhed.
+ */
+function observedMaxHeartRate(activities: ActivityRow[]): number | null {
+  const values = activities.map((a) => a.maxHr).filter((v): v is number => v != null && v > 0);
+  return values.length ? Math.max(...values) : null;
 }
 
 function parseMaxHr(value: string): number {

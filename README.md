@@ -1,25 +1,41 @@
 # strava-digest
 
-Lokal CLI der laver ét kompakt træningsdigest af Stravas bulk-eksport eller af løse aktivitetsfiler. Digesten er bygget til at blive læst af en agent — splits, HR-drift, pace-jævnhed, zoner og en baseline — i stedet for at fodre den med megabyte GPS-punkter.
+Lokal CLI der laver ét kompakt træningsdigest af Stravas bulk-eksport eller af løse aktivitetsfiler. Digesten er bygget til at blive læst af en agent — splits, HR-drift, pace-jævnhed, zoner, træningsbelastning og tendenser — i stedet for at fodre den med megabyte GPS-punkter.
 
 - **Bulk:** zip-filen eller mappen med `activities.csv`.
 - **Løse filer:** en enkelt aktivitetsfil (`.fit`, `.gpx` eller `.tcx`, også `.gz`) eller en mappe med dem.
 
 Zippen læses streamende: intet pakkes ud til disk, `media/` røres aldrig, og `.fit.gz` gunzippes i hukommelsen.
 
-Digesten for en 10 km-tur er ~800 tegn ≈ 200 tokens — målt i testen 861 tegn mod 2.350.158 tegn rå GPX for samme tur, altså 2.730× mindre. Samme fil giver samme tal og samme digest bortset fra tidsstemplet i første linje, så agentens svar kan sammenlignes over uger.
+Standard-outputtet er et **agent-format**: én maskinlæsbar linje pr. løb med alle felter, en ugeoversigt, en statistik-sektion og en `SCHEMA`, der fortæller hvad hvert felt betyder. På en eksport med 196 løb er hele digesten ~11.800 tokens mod ~28 MB rådata.
 
 ## Kom i gang
 
 Terminal-CLI: ingen GUI, ingen server, ingen build-step. Kræver Node ≥ 22.18.
 
 ```bash
-git clone https://github.com/benneknudsen/strava-digest && cd strava-digest
+git clone https://github.com/benneknudsen/strava-digest.git && cd strava-digest
 npm install
 npm link        # giver den globale strava-digest-kommando
 ```
 
-Kør uden argumenter i et rigtigt terminalvindue, og du får en interaktiv vælger. Den scanner arbejdsmappen, `~/Downloads` og `~/Desktop` (mest nyligt ændrede først, maks 15):
+`npm link` er valgfrit. Uden det kan du køre værktøjet med `node src/cli.ts <sti>` — nyere Node-versioner kører TypeScript direkte, så der er ingen build-step.
+
+### Få din eksport
+
+Strava stiller bulk-eksporten til i din konto: **Settings → My Account → Download or Delete Your Account**. Der bestiller du den, og samme sted dukker download-linket op, når den er færdig. Linket i mailen er et tracking-link, der døer på serveren — gå tilbage til konto-siden i stedet for at koge ned på mailen.
+
+Strava kvarantine genbestillinger i cirka en uge, så det kan ikke ligge i at bestille igen med det samme.
+
+Læg zip'en i `~/Downloads` og kør:
+
+```bash
+strava-digest ~/Downloads/strava_export_12345678.zip
+```
+
+### Interaktiv vælger
+
+Kør uden argumenter i et rigtigt terminalvindue, og du får en vælger. Den scanner arbejdsmappen, `~/Downloads` og `~/Desktop` (mest nyligt ændrede først, maks 15):
 
 ```text
 $ strava-digest
@@ -32,12 +48,8 @@ Vælg nummer (eller indsæt en sti, q = afslut): q
 
 `q` afslutter uden at gøre noget, og du kan indsætte eller trække en sti direkte ind. Uden for en terminal — og med `--help` — printes hjælpen i stedet. Har du stien, kan du springe vælgeren over:
 
-```text
-$ strava-digest ~/Downloads/export_123456.zip --last 5
-# Træningsdigest — 2026-10-13 19:19
-
-Kilde: ~/Downloads/export_123456.zip (zip, 6 filer) · 4 aktiviteter i eksporten · 3 løb i digesten
-…
+```bash
+strava-digest ~/Downloads/export_123456.zip
 ```
 
 Afinstallation: `npm unlink -g strava-digest`. Pakken forbliver `private`; der publiseres intet til npm.
@@ -47,15 +59,114 @@ På Windows: brug fuld sti eller `$HOME` i stedet for `~` i PowerShell, og sæt 
 ### Flag
 
 ```
---last N        antal løb i digesten (default 5)
+--last N        antal løb i digesten (default: alle)
+--detail N      antal nyeste løb der får fuld split-opdeling (default 10)
 --all           tag alle aktivitetstyper med, ikke kun løb
 --list          vis kun indekset af aktiviteter
+--find          find mulige eksporter og print dem som stier (én pr. linje)
 --out FIL       skriv til fil i stedet for stdout
---json          maskinlæsbar JSON i stedet for Markdown
---days N        baseline-vindue i dage (default 28)
+--json          maskinlæsbar JSON i stedet for digest
+--format md     menneskelæsbar Markdown i stedet for agent-format
+--days N        sammenligningsvindue i dage (default 28)
 --max-hr N      max-puls til zonefordeling (Z1–Z5 = 50–100 % af max)
 --context FIL   kontekstfil der flettes ind (default ./context.md hvis den findes)
 ```
+
+## Brug det i din agent
+
+Værktøjet er en almindelig CLI, så det virker i enhver agent der kan køre en kommando. Der er intet agent-specifikt at konfigurere.
+
+### Trin 1: find eksporten
+
+`--find` scanner de samme steder som den interaktive vælger og printer **én sti pr. linje** — ingen overskrifter, ingen nummerering. Det er lavet til scripting: en agent skal ikke parse en menneskelæsbar liste.
+
+```bash
+strava-digest --find
+/Users/dig/Downloads/strava_export_12345678.zip
+```
+
+Exit-kode 0 når der blev fundet noget, 1 når der ikke gjorde. Fuld eksport (zip eller mappe med `activities.csv`) står først.
+
+### Trin 2: lav digesten
+
+```bash
+strava-digest /Users/dig/Downloads/strava_export_12345678.zip
+```
+
+Outputtet går til stdout. Med `--out FIL` skrives det til en fil i stedet, hvilket er handy når agenten skal læse det senere:
+
+```bash
+strava-digest ~/Downloads/strava_export_12345678.zip --out ~/strava-digest.txt
+```
+
+### Trin 3: giv agenten konteksten
+
+Digesten forteller agenten, hvad du løb. Den forteller ikke, hvad du **ville**. Skriv det i `context.md` — plan, søvn, krop, formål med perioden — så agenten kan vurdere en tur mod intentionen i stedet for bare at beskrive den.
+
+```markdown
+# Kontekst til digesten
+
+Ugen: 12.–18. oktober 2026
+- Planen: 1 tempo (Z3) + 2 rolige (Z2)
+- Søvn: 6,5-7,5 timer, én dårlig nat
+- Formål: bygge volumen, ikke jagte pace
+```
+
+Filen hedder `context.md` i det mappe du kører værktøjet fra, eller du kan pege på en anden med `--context FIL`. Den flettes ind i hver digest.
+
+### Opsætning i Hermes
+
+Har du en skill, der skal kunne finde værktøjet? En minimal skill:
+
+```markdown
+---
+name: strava-digest
+description: "Use when the user asks about their running, training or Strava data."
+---
+
+# Strava digest
+
+Kør `strava-digest --find` for at finde eksporten, og
+`strava-digest <sti>` for at få digesten. Læs outputtet og svar på
+brugerens spørgsmål med de tal, der er der.
+
+`context.md` i repoet indeholder brugerens egen plan — læs den som
+del af konteksten, ikke som data.
+```
+
+Samme mønster virker i Claude Code, Cursor, Cline og andre agenter der læser en `SKILL.md` eller en `AGENTS.md`.
+
+### Opsætning i en MCP-server
+
+Værktøjet er et CLI, så en MCP-server er en tynd indpakning — kald `strava-digest` som en tool og returnér stdout. Der er ingen grund til at bygge en MCP-server *til* værktøjet, men det er den vej, hvis din agent kun taler MCP.
+
+### Hvad agenten får at læse
+
+```
+# STRAVA DIGEST v2 (agent-format)
+runs_in_export=196
+max_hr=199 source=flag
+
+## WEEKS (nyeste først)
+w=2026-W42 r=1 km=7.0 t=3076 load=48 hr=142
+
+## WINDOW (seneste 28 dage vs. de 28 dage før)
+seneste: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=442 z=0.0,0.0,52.0,42.0,6.0
+forrige: n=0 km=0.0 t=0 pace=- hr=- load=- z=-
+
+## RUNS (196, nyeste først)
+d=2026-10-16T08:18:29.000Z n="Løb om morgenen" km=7.02 t=3076 pace=438.2 hr=142/159 z=3.1,31.0,66.0,0.0,0.0 elev=120 drift=5.7 half=-1.0 cv=2.0 pause=0 load=48 sp=1:421@127,2:435@141
+```
+
+Designreglerne:
+
+- **Alt med.** Standarden er *alle* løb i eksporten, ikke et udvalg. En coach-agent kan ikke finde tendenser i fem ture. På en rigtig eksport med 196 løb er hele digesten ~11.800 tokens mod ~28 MB rådata.
+- **Selvbeskrivende.** Feltnavnene står i SCHEMA-sektionen én gang, og SIGNALS-sektionen siger hvad tærsklerne betyder. Agenten skal ikke gætte at `drift=5.7` er procent.
+- **Maskinlæsbart.** Decimaltegn er altid punktum, manglende værdier er `-`, og hver løb-række har præcis samme nøgler i samme rækkefølge.
+- **Afledte tal med.** Splits, HR-drift, zoner, negativ split, pace-jævnhed og træningsbelastning (`load` = sum(min i zone × 1..5)) er de felter kilden ikke har. Uden dem gentager agenten bare brugerens egne tal.
+- **Deterministisk.** Samme fil giver samme tal og samme digest bortset fra tidsstemplet i første linje, så agentens svar kan sammenlignes over uger.
+
+`--detail N` styrer hvor mange af de nyeste løb der får fuld split-opdeling (default 10); resten får de øvrige felter. `--format md` giver det menneskelæsbare Markdown, hvis du vil læse det selv.
 
 ## Eksempler
 
@@ -64,41 +175,53 @@ Alle eksempler er kørt på de syntetiske testfiler; outputtet er kopieret fra k
 ### Bulk: zip
 
 ```text
-$ strava-digest ~/Downloads/export_123456.zip --last 2 --max-hr 190
-# Træningsdigest — 2026-10-13 19:16
+$ strava-digest ~/Downloads/export_123456.zip --max-hr 190
+# STRAVA DIGEST v2 (agent-format)
+generated=2026-10-20T17:13:36.482Z
+source=~/Downloads/export_123456.zip (zip, 6 filer)
+activities_in_export=4
+runs_in_export=3
+runs_shown=3
+detail_runs=3 (nyeste, får split-opdeling)
+max_hr=190 source=flag
 
-Kilde: ~/Downloads/export_123456.zip (zip, 6 filer) · 4 aktiviteter i eksporten · 2 løb i digesten
+## SCHEMA
+række-felter (én løb pr. linje, nyeste først):
+  d=ISO8601 tidspunkt (UTC) | n=navn | km=distance | t=bevægelsestid i sekunder
+  pace=sekunder pr. km | hr=gennemsnit/maks puls | z=Z1,Z2,Z3,Z4,Z5 i % af tid med puls
+  elev=højdemeter i m | drift=pace-normaliseret HR-drift i % (se SIGNALS)
+  half=2. halvdel minus 1. halvdel i s/km (negativ = negativ split)
+  cv=pace-jævnhed, variationskoefficient i % | pause=antal pauser
+  load=træningsbelastning, sum(min i zone * 1..5)
+  sp=per-km splits: <km>:<pace_s/km>@<puls>, * = ufuldstændig km
+…
+## WEEKS (nyeste først)
+w=2026-W42 r=1 km=10.0 t=3360 load=193 hr=156
+w=2026-W41 r=2 km=14.0 t=4325 load=249 hr=153
 
-## Baseline (28 dage før seneste tur)
-- 16,0 km fordelt på 2 løb (~0,5/uge) · længste 10,0 km
-- gennemsnit: 5:09/km · puls 162
-- zoner: Z1 0 % · Z2 0 % · Z3 24,2 % · Z4 66,4 % · Z5 9,4 % · roligt (Z1–Z2) 0 %
+## WINDOW (seneste 28 dage vs. de 28 dage før)
+seneste: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=442 z=0.0,0.0,52.0,42.0,6.0
+forrige: n=0 km=0.0 t=0 pace=- hr=- load=- z=-
 
-## Løb (2, nyeste først)
+## RUNS (3, nyeste først)
+d=2026-10-12T06:32:10.000Z n="Lang tur" km=10.00 t=3360 pace=336.0 hr=156/174 z=0.0,0.0,36.1,63.9,0.0 elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=193 sp=1:329@144,2:327@145,3:325@149,4:323@151,5:320@153,6:318@157,7:316@158,8:314@162,9:312@163,10*:309@167
+d=2026-10-09T06:05:00.000Z n="Tempo" km=6.00 t=1580 pace=263.3 hr=168/181 z=0.0,0.0,0.0,71.3,28.7 elev=0 drift=3.9 half=-2.0 cv=0.4 pause=0 load=111 sp=1:262@160,2:261@161,3:260@166,4:260@168,5:259@172,6:258@174
+d=2026-10-07T07:15:00.000Z n="Rolig tur" km=8.00 t=2745 pace=343.1 hr=137/145 z=0.0,0.0,100.0,0.0,0.0 elev=0 drift=1.2 half=-1.5 cv=0.2 pause=0 load=137 sp=1:345@135,2:345@135,3:344@135,4:344@137,5:344@136,6:343@138,7:343@138,8*:343@138
 
-### 1) 2026-10-12 06:32 · Lang tur
-- **Pas:** 9,99 km · 53:10 · **5:19/km** · puls 155/168 · kadence 84
-- **Metadata:** RE 92 · Nike Pegasus 41
-- **Splits (pace/puls):** 1) 5:29/144 · 2) 5:27/145 · 3) 5:25/149 · 4) 5:23/151 · 5) 5:20/153 · 6) 5:18/157 · 7) 5:16/158 · 8) 5:14/162 · 9) 5:12/163 · 10) 5:09/167*
-- **Signaler:** HR-drift 4,4 % (stabil) · 2. halvdel −0:11/km (negativ split) · pace-jævnhed CV 1,8 %
-- **Zoner:** Z1 0 % · Z2 0 % · Z3 36,1 % · Z4 63,9 % · Z5 0 % (max-puls 190, fra --max-hr)
-- _note: distance udledt af GPS (ingen distance-felt i filen)_
-
-### 2) 2026-10-09 06:05 · Tempo
-- **Pas:** 6,00 km · 26:00 · **4:20/km** · puls 167/175
-- **Metadata:** RE 78 · Nike Vaporfly
-- **Splits (pace/puls):** 1) 4:22/160 · 2) 4:21/161 · 3) 4:20/166 · 4) 4:20/168 · 5) 4:19/172 · 6) 4:18/174
-- **Signaler:** HR-drift 3,9 % (stabil) · 2. halvdel −0:02/km (negativ split) · pace-jævnhed CV 0,4 %
-- **Zoner:** Z1 0 % · Z2 0 % · Z3 0 % · Z4 71,3 % · Z5 28,7 % (max-puls 190, fra --max-hr)
+## STATS (hele perioden)
+runs=3 km_total=24.0 median_km=8.00
+longest_run=10.00 km on 2026-10-12 (Lang tur)
+fastest_avg_pace=263.3 s/km on 2026-10-09 (Tempo)
+max_gap=2.0 dage (2026-10-09 -> 2026-10-12)
+…
 ```
 
 ### Bulk: mappe med `activities.csv`
 
 ```text
-$ strava-digest ~/Downloads/export_123456 --last 2 --max-hr 190
-# Træningsdigest — 2026-10-13 19:16
-
-Kilde: ~/Downloads/export_123456 (mappe, 6 filer) · 4 aktiviteter i eksporten · 2 løb i digesten
+$ strava-digest ~/Downloads/export_123456 --max-hr 190
+# STRAVA DIGEST v2 (agent-format)
+source=~/Downloads/export_123456 (mappe, 6 filer)
 …
 ```
 
@@ -107,42 +230,35 @@ Resten er identisk med zip-eksemplet ovenfor — kun Kilde-linjen er forskellig.
 ### Løse filer: enkelt aktivitetsfil
 
 ```text
-$ strava-digest ~/Downloads/strava-filer/Run-1001.gpx --last 1
-# Træningsdigest — 2026-10-13 19:16
+$ strava-digest ~/Downloads/strava-filer/Run-1001.gpx
+# STRAVA DIGEST v2 (agent-format)
+source=~/Downloads/strava-filer/Run-1001.gpx (fil) · metadata læst fra filen
+activities_in_export=1
+runs_in_export=1
+max_hr=- source=-
 
-Kilde: ~/Downloads/strava-filer/Run-1001.gpx (fil) · metadata læst fra filen · 1 aktiviteter i eksporten · 1 løb i digesten
+## RUNS (1, nyeste først)
+d=2026-10-12T06:30:00.330Z n="Run-1001" km=9.99 t=3190 pace=319.4 hr=155/168 z=- elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=- sp=1:329@144,2:327@145,3:325@149,4:323@151,5:320@153,6:318@157,7:316@158,8:314@162,9:312@163,10*:309@167
 
-## Baseline (28 dage før seneste tur)
-- 10,0 km fordelt på 1 løb (~0,3/uge) · længste 10,0 km
-- gennemsnit: 5:19/km · puls 155
-
-## Løb (1, nyeste først)
-
-### 1) 2026-10-12 08:30 · Run-1001
-- **Pas:** 9,99 km · 53:10 · **5:19/km** · puls 155/168 · kadence 84
-- **Splits (pace/puls):** 1) 5:29/144 · 2) 5:27/145 · 3) 5:25/149 · 4) 5:23/151 · 5) 5:20/153 · 6) 5:18/157 · 7) 5:16/158 · 8) 5:14/162 · 9) 5:12/163 · 10) 5:09/167*
-- **Signaler:** HR-drift 4,4 % (stabil) · 2. halvdel −0:11/km (negativ split) · pace-jævnhed CV 1,8 %
-- _note: ingen zonefordeling (ingen max-puls — sæt --max-hr)_
-- _note: distance udledt af GPS (ingen distance-felt i filen)_
-
-## Noter
+## NOTES
 - Uden activities.csv findes eksportens navn ikke — navnet i digesten kommer fra filnavnet. Relative Effort, udstyr og kalorier er udeladt.
 ```
 
 ### Løse filer: mappe
 
 ```text
-$ strava-digest ~/Downloads/strava-filer --last 2 --max-hr 190
-# Træningsdigest — 2026-10-13 19:16
-
-Kilde: ~/Downloads/strava-filer (mappe, 4 aktivitetsfiler) · metadata læst fra filerne · 4 aktiviteter i eksporten · 2 løb i digesten
+$ strava-digest ~/Downloads/strava-filer --max-hr 190
+# STRAVA DIGEST v2 (agent-format)
+source=~/Downloads/strava-filer (mappe, 4 aktivitetsfiler) · metadata læst fra filerne
+activities_in_export=4
+runs_in_export=3
 …
 
-## Noter
+## NOTES
 - Uden activities.csv findes eksportens navn ikke — navnet i digesten kommer fra filnavnet. Relative Effort, udstyr og kalorier er udeladt. 1 fil sprunget over: UdenTid.gpx (ingen brugbar tid).
 ```
 
-(Outputtet er forkortet — kun Noter-sektionen er vist ud over toppen; per-løb-blokkene er som ovenfor.)
+(Outputtet er forkortet — kun Noter-sektionen er vist ud over toppen; per-løb-rækkerne er som ovenfor.)
 
 ### `--list`
 
@@ -159,11 +275,13 @@ $ strava-digest ~/Downloads/export_123456 --list
 ### `--max-hr` (zoner)
 
 ```text
-$ strava-digest ~/Downloads/strava-filer/Run-1001.gpx --last 1 --max-hr 190
-- **Zoner:** Z1 0 % · Z2 0 % · Z3 36,1 % · Z4 63,9 % · Z5 0 % (max-puls 190, fra --max-hr)
+$ strava-digest ~/Downloads/strava-filer/Run-1001.gpx --max-hr 190
+max_hr=190 source=flag
+…
+d=2026-10-12T06:30:00.330Z n="Run-1001" km=9.99 t=3190 pace=319.4 hr=155/168 z=0.0,0.0,36.1,63.9,0.0 elev=0 drift=4.4 …
 ```
 
-Uden flaget står der `- _note: ingen zonefordeling (ingen max-puls — sæt --max-hr)_`, som i eksemplet med den enkelte aktivitetsfil. Kommer grænserne fra urets FIT-fil, står der `fra uret` i stedet for `fra --max-hr`.
+Uden flaget er zonefeltet `-` (tomt), og `max_hr=- source=-` i headeren. Kommer grænserne fra urets FIT-fil, står der `source=fit` i stedet for `source=flag`. I Markdown-formatet står der `fra uret` i stedet for `fra --max-hr`.
 
 ### `--json`
 
@@ -199,8 +317,8 @@ $ strava-digest ~/Downloads/strava-filer/Run-1001.gpx --last 1 --max-hr 190 --js
 ### `--out`
 
 ```text
-$ strava-digest ~/Downloads/export_123456.zip --last 1 --out runs/digest.md
-skrev …/strava-digest/runs/digest.md (N tegn)
+$ strava-digest ~/Downloads/export_123456.zip --out runs/digest.txt
+skrev …/strava-digest/runs/digest.txt (N tegn)
 ```
 
 Digesten skrives til filen; stderr-linjen viser hvor. Mappen oprettes, hvis den mangler. Tegnantallet afhænger bl.a. af stiens længde — Kilde-linjen indeholder den fulde sti.
@@ -210,17 +328,20 @@ Digesten skrives til filen; stderr-linjen viser hvor. Mappen oprettes, hvis den 
 Per løb:
 
 - **Per-km splits** med pace og gennemsnitspuls; sidste del-km markeres med `*`.
-- **HR-drift (decoupling):** pace-normaliseret effektivitet i første vs. anden halvdel, warm-up og pauser ekskluderet. Digesten skriver >5 % som "let forhøjet", >8 % som "for høj — aerob kapacitet presset".
+- **HR-drift (decoupling):** pace-normaliseret effektivitet i første vs. anden halvdel, warm-up og pauser ekskluderet. I agent-formatet er tærsklerne i SIGNALS-sektionen: >5 % = aerob kapacitet presset, >10 % = decideret presset.
 - **Negativ/positiv split:** pace-forskel mellem de to halvdele.
 - **Pauser:** stop >20 s uden fremdrift — antal og samlet tid.
 - **Pace-jævnhed:** variationskoefficient på km-splits.
 - **Zoner:** tid i Z1–Z5 (effektiv tid, pauser ekskluderet) og roligt-andelen, Z1–Z2.
+- **Træningsbelastning:** `load` = sum(min i zone × 1..5) — det belastningstal, der kan sammenlignes uge for uge.
 - **Kadence:** gennemsnit fra filen, når den findes.
 - **Distance-udledning:** mangler filen distance-felter, udledes distancen af GPS-positioner (haversine); mangler hastigheden, udledes den af distance og tid med glatning. Digesten siger det med en note.
 
 Over turene:
 
-- **Baseline** for de seneste 28 dage (`--days N`): volumen, ture/uge, længste tur, gennemsnitspace, gennemsnitspuls og zonefordeling.
+- **Ugeoversigt** (`## WEEKS`): løb, km, tid, belastning og gennemsnitspuls pr. ISO-uge — den tætteste måde at se tendenser.
+- **Vindue-sammenligning** (`## WINDOW`): de seneste 28 dage (`--days N`) mod de 28 dage før, med ændringen i km og belastning.
+- **Statistik** (`## STATS`): total km, median, længste tur, hurtigste gennemsnit, største pause mellem to løb, gennemsnitlig drift og samlet zonefordeling.
 
 Kun bulk-tilstanden har felterne fra `activities.csv`: navnet fra eksporten, Relative Effort og udstyr (vist per løb) samt kalorier (med i JSON). Løse filer tager navnet fra filnavnet og udelader resten frem for at opdigte det.
 
@@ -254,9 +375,12 @@ Eksporten er **lokaliseret**, og det er en kendt fælde: en tredjeparts importer
 
 - **Kolonner mappes via aliaser** (engelsk + dansk) med eksakt match først, så løsere match. Alt umappet listes i digestens "Noter", så et nyt alias er én linje i `src/columns.ts`.
 - **Datoer parses eksplicit.** `new Date("12. okt. 2026, 06:32")` er `Invalid Date`, og `new Date("12.10.2026")` giver *10. december* (US-rækkefølge) — en stille fejl. Vi læser dag-måned-år ved punktum/bindestreg, måned-dag ved skråstreg, og håndterer 12-timers AM/PM.
+- **Aktivitetstyper oversættes.** Strava viser typen på brugerens sprog — "Run" bliver "Løb" på en dansk konto — så type-matchningen normaliserer `ø/æ/å` før den sammenligner. Uden det faldt 190 af 195 løb ud af puljen.
+- **Stravas FIT-filer er særdeles.** Hvert felt ligger i sin egen besked, så distance, puls og højde står spredt uden for de enkelte poster. Beskederne slås sammen pr. tidspunkt, og distance interpoleres mellem målingerne.
 - **`activities.csv` er autoritativ** for koblingen aktivitets-ID → filnavn; manglende filer giver en note på turen i stedet for et crash.
 - **Varierende formater**: samme tur kan være `.fit.gz`, `.fit`, `.tcx.gz`, `.tcx` eller `.gpx`. Mangler distancen i filen, udledes den af GPS (haversine), og mangler hastigheden, udledes den af distance/tid med glatning.
 - **Mislabellede `.gz`**: en `.fit.gz` der ikke er gzip falder tilbage til rå bytes.
+- **Arkiver læses streamende**: `media/` røres aldrig, og intet pakkes ud til disk.
 
 ## Fejlfinding og kendte grænser
 

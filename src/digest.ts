@@ -13,12 +13,28 @@ export interface DigestInput {
   sourceLabel: string;
   activitiesInExport: number;
   runs: DigestedRun[];
+  /**
+   * Alle løb i eksportens baseline-vindue (beregnet på de samme filer).
+   * Uden denne bliver baselin-statistikken kun en gentagelse af de løb
+   * der vises i digesten — altså ingen baseline overhovedet.
+   */
+  baselineRuns?: DigestedRun[];
   baselineDays: number;
   unmatchedHeaders: string[];
   contextText: string;
   generatedAt: Date;
   poolLabel: string;
   hostNote?: string;
+  /** hjælpetekst når zonekonfigurationen mangler, fx et observeret puls-maks */
+  zoneHint?: string;
+  /** antal løb i eksportens pulje (kan være mere end runs.length) */
+  runsTotal?: number;
+  /** max-puls brugt til zonefordelingen */
+  maxHr?: number | null;
+  /** hvor max-pulsen kom fra */
+  maxHrSource?: 'flag' | 'fit' | 'eksport-observation' | null;
+  /** noter til agenten (udeladte felter, forbehold) */
+  notes?: string[];
 }
 
 const num = (v: number | null | undefined, digits = 0, fallback = '–'): string =>
@@ -35,8 +51,10 @@ const zoneLine = (pcts: number[]): string =>
 
 export function fmtPace(secPerKm: number | null | undefined): string {
   if (secPerKm == null || !Number.isFinite(secPerKm) || secPerKm <= 0) return '–';
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
+  // 359,6 sek skal vise 6:00 — ikke 5:60. Rundingen carryes derfor over.
+  const total = Math.round(secPerKm);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}/km`;
 }
 
@@ -64,7 +82,8 @@ const fmtDelta = (sec: number | null): string => {
 export function renderMarkdown(input: DigestInput): string {
   const { runs, baselineDays } = input;
   const base = runs[0]?.row.date ?? input.generatedAt;
-  const stats = windowStats(runs.map((r) => r.row), baselineDays, base);
+  const baselinePool = input.baselineRuns?.length ? input.baselineRuns : runs;
+  const stats = windowStats(baselinePool.map((r) => r.row), baselineDays, base);
   const out: string[] = [];
 
   out.push(`# Træningsdigest — ${iso(input.generatedAt)}`);
@@ -82,7 +101,7 @@ export function renderMarkdown(input: DigestInput): string {
       `- ${num(stats.distanceKm, 1)} km fordelt på ${stats.count} løb (~${num(stats.runsPerWeek, 1)}/uge) · længste ${num(stats.longestKm, 1)} km`,
     );
     out.push(`- gennemsnit: ${fmtPace(stats.avgPaceSecPerKm)} · puls ${num(stats.avgHr, 0)}`);
-    const zoneSums = windowZoneSeconds(runs, base, baselineDays);
+    const zoneSums = windowZoneSeconds(baselinePool, base, baselineDays);
     if (zoneSums) {
       const pcts = zonePcts(zoneSums);
       const roligt = (pcts[0] ?? 0) + (pcts[1] ?? 0);
@@ -94,7 +113,7 @@ export function renderMarkdown(input: DigestInput): string {
   out.push(`## ${input.poolLabel} (${runs.length}, nyeste først)`);
   runs.forEach((run, i) => {
     out.push('');
-    out.push(...renderRun(run, i + 1));
+    out.push(...renderRun(run, i + 1, input.zoneHint));
   });
 
   if (input.contextText.trim()) {
@@ -118,19 +137,39 @@ export function renderMarkdown(input: DigestInput): string {
   return `${out.join('\n')}\n`;
 }
 
-function renderRun(run: DigestedRun, index: number): string[] {
+function renderRun(run: DigestedRun, index: number, zoneHint?: string): string[] {
   const { row, analysis } = run;
   const lines: string[] = [];
-  // Analysens distance vinder, men en 0'er uden distance i rækken betyder
-  // "filen bærer ingen distance" — ikke en rigtig tur på nul kilometer.
+  // Distance og puls kommer fra CSV'en, når den findes: det er Stravas
+  // egen, kanoniske tal for aktiviteten. Filens egen distance afviger
+  // typisk 1–4 %, fordi Strava koder eksportfilerne selv (sessionens
+  // total og GPS-udledt distance er begge reconstructions), og CSV'en
+  // afviger 0 % i alle 195 løb i en rigtig eksport.
+  //
+  // Det er FILEN, der giver det CSV'en ikke har: splits, HR-drift,
+  // zoner, pauser og pace-jævnhed.
   const trackDistanceM = analysis?.distanceM;
   const distanceM =
-    trackDistanceM != null && (trackDistanceM > 0 || row.distanceM != null)
-      ? trackDistanceM
-      : row.distanceM;
+    row.distanceM != null && row.distanceM > 0
+      ? row.distanceM
+      : trackDistanceM != null && trackDistanceM > 0
+        ? trackDistanceM
+        : row.distanceM;
+  // Varighed og pace skal bygge på SAMME tal, ellers er de ikke
+  // sammenlignelige. CSV'ens "Tid i bevægelse" er Stravas egen beregning
+  // af den effektive tid; filens er en rekonstruktion (elapsed minus
+  // fundne pauser). CSV'en vinder, når den findes.
+  const movingSec = row.movingSec ?? analysis?.movingSec ?? null;
+  const avgPace = distanceM && movingSec ? movingSec / (distanceM / 1000) : null;
   lines.push(`### ${index}) ${iso(row.date)} · ${row.name}`);
+  // Puls: CSV'ens gennemsnit er urets egen tidsvægtede middel. Filens
+  // egen middel afviger typisk 5–10 bpm, fordi Stravas FIT-filer kun
+  // skriver puls i hvert andet punkt. Vi bruger derfor CSV'en når den
+  // findes, og filens værdi ellers.
+  const avgHr = row.avgHr ?? analysis?.avgHr ?? null;
+  const maxHr = row.maxHr ?? analysis?.maxHr ?? null;
   lines.push(
-    `- **Pas:** ${fmtKm(distanceM)} · ${fmtDuration(analysis?.movingSec ?? row.movingSec)} · **${fmtPace(analysis?.avgPaceSecPerKm ?? paceFrom(row))}** · puls ${num(analysis?.avgHr ?? row.avgHr, 0)}/${num(analysis?.maxHr ?? row.maxHr, 0)}${analysis?.avgCadence != null ? ` · kadence ${num(analysis.avgCadence)}` : ''}`,
+    `- **Pas:** ${fmtKm(distanceM)} · ${fmtDuration(movingSec)} · **${fmtPace(avgPace)}** · puls ${num(avgHr, 0)}/${num(maxHr, 0)}${analysis?.avgCadence != null ? ` · kadence ${num(analysis.avgCadence)}` : ''}`,
   );
   if (analysis) {
     const extras: string[] = [];
@@ -177,9 +216,16 @@ function renderRun(run: DigestedRun, index: number): string[] {
     } else if (analysis.zoneConfigured) {
       lines.push('- _note: ingen zonefordeling (turen har ingen pulsdata)_');
     } else {
-      lines.push('- _note: ingen zonefordeling (ingen max-puls — sæt --max-hr)_');
+      lines.push(
+        `- _note: ingen zonefordeling (ingen max-puls${zoneHint ? ` — ${zoneHint}` : ' — sæt --max-hr'})_`,
+      );
     }
-    if (analysis.distanceDerived) lines.push('- _note: distance udledt af GPS (ingen distance-felt i filen)_');
+    // Noten siger kun noget, når vi faktisk bruger den GPS-udledte distance.
+    // Når CSV'en har totalen, bruger vi den (den afviger 0 % mod Strava).
+    const usingGpsDistance = analysis.distanceDerived && !(row.distanceM != null && row.distanceM > 0);
+    if (usingGpsDistance) {
+      lines.push('- _note: distance udledt af GPS (filen bærer ingen distance — tallet er en tilnærmelse)_');
+    }
   } else if (run.error) {
     lines.push(`- _intra-tur-detaljer utilgængelige: ${run.error}_`);
   }
