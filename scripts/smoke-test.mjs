@@ -250,7 +250,10 @@ try {
   const cliPath = join(repoRoot, 'src', 'cli.ts');
   const findOut = execFileSync('node', [cliPath, '--find'], { encoding: 'utf8', cwd: tmp });
   const findLines = findOut.trim().split('\n').filter(Boolean);
-  check('--find printer stier uden nummerering', findLines.every((l) => l.startsWith('/')), (v) => v === true);
+  // Stier er absolutte, men formatet afhænger af OS: /home/... på Unix,
+  // C:\Users\... på Windows. Begge skal accepteres.
+  const isAbsolute = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);
+  check('--find printer absolutte stier uden nummerering', findLines.every(isAbsolute), (v) => v === true);
   check('--find finder eksportmappen', findOut.includes(tmp), (v) => v === true);
   check('--find har ingen overskrift', !findOut.includes('Kandidat') && !findOut.includes('Vælg'), (v) => v === true);
   check('--find kører uden TTY', findOut.length > 0, (v) => v === true);
