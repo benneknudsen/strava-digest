@@ -30,7 +30,7 @@ export function skillSourcePath(): string {
 export interface InstallResult {
   target: string;
   path: string;
-  status: 'installeret' | 'opdateret' | 'ikke fundet' | 'fejlede';
+  status: 'installed' | 'updated' | 'not found' | 'failed';
   detail?: string;
 }
 
@@ -76,7 +76,7 @@ export async function installSkill(
   } catch {
     return {
       source,
-      results: [{ target: '—', path: source, status: 'fejlede', detail: 'skill-filen findes ikke i pakken' }],
+      results: [{ target: '—', path: source, status: 'failed', detail: 'the skill file is not in the package' }],
     };
   }
 
@@ -93,7 +93,7 @@ export async function installSkill(
     // filer agenten aldrig læser.
     const parentExists = await stat(skillsRoot).then((s) => s.isDirectory()).catch(() => false);
     if (!targetDirs?.length && !parentExists) {
-      results.push({ target: t.name, path: dest, status: 'ikke fundet', detail: 'the agent does not appear to be installed' });
+      results.push({ target: t.name, path: dest, status: 'not found', detail: 'the agent does not appear to be installed' });
       continue;
     }
     // Opdater en eksisterende skill in place, så vi ikke ender med to
@@ -113,14 +113,14 @@ export async function installSkill(
       results.push({
         target: t.name,
         path: targetFile,
-        status: before ? 'opdateret' : 'installeret',
-        detail: before ? 'din egen tilpasning ligger i SKILL.md.bak' : undefined,
+        status: before ? 'updated' : 'installed',
+        detail: before ? 'your own version is saved in SKILL.md.bak' : undefined,
       });
     } catch (e) {
       results.push({
         target: t.name,
         path: targetFile,
-        status: 'fejlede',
+        status: 'failed',
         detail: e instanceof Error ? e.message : String(e),
       });
     }
@@ -131,19 +131,23 @@ export async function installSkill(
 /** Kommandolinje-udskrift til installeringen. */
 export function renderInstall(result: { results: InstallResult[]; source: string }): string {
   const out: string[] = [];
-  const ok = result.results.filter((r) => r.status === 'installeret' || r.status === 'opdateret');
-  out.push('strava-digest — skill installeret');
+  const ok = result.results.filter((r) => r.status === 'installed' || r.status === 'updated');
+  out.push('strava-digest — skill installed');
   out.push('');
+  const missing: string[] = [];
   for (const r of result.results) {
-    if (r.status === 'fejlede') {
-      out.push(`  fejlede     ${r.target}: ${r.detail ?? 'ukendt fejl'}`);
-    } else if (r.status === 'ikke fundet') {
-      out.push(`  ikke fundet ${r.target}`);
+    if (r.status === 'failed') {
+      out.push(`  failed      ${r.target}: ${r.detail ?? 'unknown error'}`);
+    } else if (r.status === 'not found') {
+      // En agent der ikke findes er ikke en fejl. De samles på én linje,
+      // så en maskine med seks agenter ikke fylder skærmen med støj.
+      missing.push(r.target);
     } else {
       out.push(`  ${r.status.padEnd(11)} ${r.target}  →  ${r.path}`);
       if (r.detail) out.push(`  ${' '.repeat(11)} ${r.detail}`);
     }
   }
+  if (missing.length) out.push(`  not found   ${missing.join(', ')}`);
   out.push('');
   if (ok.length) {
     out.push('Restart the agent and ask it about your runs.');

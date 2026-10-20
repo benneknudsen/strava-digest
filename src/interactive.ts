@@ -15,6 +15,14 @@ export interface Candidate {
   mtimeMs: number;
 }
 
+/** The internal kind is Danish; the picker shows English. */
+const KIND_LABELS: Record<Candidate['kind'], string> = {
+  'csv-mappe': 'export folder',
+  zip: 'zip',
+  'aktivitetsmappe': 'activity folder',
+  'aktivitetsfil': 'activity file',
+};
+
 /**
  * Find læsbare kilder ét niveau ned i hvert dir — plus dir'et selv, så en
  * arbejdsmappe der ER en eksport også bliver en kandidat. Manglende mapper
@@ -175,7 +183,7 @@ function printCandidates(candidates: Candidate[]): void {
     return;
   }
   candidates.forEach((c, i) => {
-    console.log(`${i + 1})  ${c.kind} · ${c.count} ${c.count === 1 ? 'file' : 'files'} · ${c.path}`);
+    console.log(`${i + 1})  ${KIND_LABELS[c.kind]} · ${c.count} ${c.count === 1 ? 'file' : 'files'} · ${c.path}`);
   });
 }
 

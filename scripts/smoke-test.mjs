@@ -281,6 +281,10 @@ try {
   check('--install-skill skriver SKILL.md', existsSync(join(skillDir, 'SKILL.md')), (v) => v === true);
   check('--install-skill fortæller hvor den landede', instOut.includes('SKILL.md'), (v) => v === true);
   check('--install-skill siger hvad der skal spørges om', instOut.includes('how was my week'), (v) => v === true);
+  // Install-outputtet er engelsk, ligesom resten af værktøjets output.
+  check('--install-skill skriver engelsk', instOut, (v) =>
+    v.includes('skill installed') && !/[æøå]/.test(instOut),
+  );
   const installed = await readFile(join(skillDir, 'SKILL.md'), 'utf8');
   // Linjeskift må ikke afgøre frontmatter: Git på Windows konverterer
   // LF -> CRLF ved checkout, så den installerede skill kan have \r\n.

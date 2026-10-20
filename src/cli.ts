@@ -90,7 +90,9 @@ async function main(): Promise<number> {
     const explicit = argv[i + 1] && !argv[i + 1]!.startsWith('--') ? argv[i + 1]! : undefined;
     const { results, source } = await installSkill(explicit ? [explicit] : undefined);
     console.log(renderInstall({ results, source }));
-    return results.some((r) => r.status !== 'fejlede') ? 0 : 1;
+    // Exit 0 kun hvis mindst én agent faktisk fik en skill. "not found" er
+    // ikke en succes.
+    return results.some((r) => r.status === 'installed' || r.status === 'updated') ? 0 : 1;
   }
   if (!argv.length) {
     if (!process.stdin.isTTY) {

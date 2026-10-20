@@ -36,7 +36,7 @@ function openZip(path: string): Promise<ExportSource> {
       });
       zf.on('end', () =>
         resolve({
-          label: `${path} (zip, ${entries.size} filer)`,
+          label: `${path} (zip, ${entries.size} files)`,
           list: () => [...entries.keys()],
           read: (name) => readZipEntry(zf, entries, name),
           close: async () => zf.close(),
@@ -78,7 +78,7 @@ async function openDir(path: string): Promise<ExportSource> {
   }
   await walk(path);
   return {
-    label: `${path} (mappe, ${files.length} filer)`,
+    label: `${path} (folder, ${files.length} files)`,
     list: () => [...files],
     read: (name) => readFile(join(path, name)),
     close: async () => {},
