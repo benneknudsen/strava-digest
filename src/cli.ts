@@ -208,6 +208,10 @@ async function runBulk(
     return 1;
   }
 
+  // Den højeste puls i eksporten bruges som zone-fallback, så den skal
+  // ligge FØR analysen — ellers ville turene blive analyseret uden zoner.
+  const observedMaxHr = observedMaxHeartRate(activities);
+
   // Alle løb i pool'en analyseres én gang, og resultaterne genbruges til
   // både digesten og baseline. At analysere to gange ville double-parse
   // hver fil og gøre hele eksporten unødigt langsom.
@@ -221,7 +225,10 @@ async function runBulk(
     try {
       const buf = await source.read(entry);
       const track = parseActivityBuffer(entry, buf);
-      analysed.push({ row, analysis: analyseRun(track, resolveZoneConfig(args.maxHr, track.zones)) });
+      analysed.push({
+        row,
+        analysis: analyseRun(track, resolveZoneConfig(args.maxHr, track.zones, observedMaxHr)),
+      });
     } catch (err) {
       analysed.push({ row, analysis: null, error: err instanceof Error ? err.message : String(err) });
     }
@@ -241,7 +248,6 @@ async function runBulk(
     : [];
 
   const contextText = await readContext(args.context);
-  const observedMaxHr = observedMaxHeartRate(activities);
   const zoneSource: 'flag' | 'fit' | 'export-observation' | null =
     args.maxHr != null ? 'flag' : observedMaxHr != null ? 'export-observation' : null;
   const input = {
@@ -270,7 +276,7 @@ async function runBulk(
     ],
     zoneHint:
       args.maxHr == null && observedMaxHr != null
-        ? `observed max HR in the export is ${observedMaxHr} — use --max-hr ${observedMaxHr}`
+        ? `zones use the highest heart rate in the export (${observedMaxHr}), observed — pass --max-hr <your max> to use your own`
         : undefined,
     hostNote: map.unmatched.length
       ? 'Add aliases in src/columns.ts if a field is missing from the digest.'

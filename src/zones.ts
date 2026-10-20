@@ -2,7 +2,7 @@ import type { TrackPoint } from './activity.ts';
 
 export interface ZoneConfig {
   maxHr: number;
-  source: 'flag' | 'fit';
+  source: 'flag' | 'fit' | 'export-observation';
   /** Øvre puls for Z1, Z2, Z3 og Z4 — fire interne skæringspunkter. */
   boundaries: number[];
 }
@@ -26,16 +26,29 @@ export function boundariesFromMaxHr(maxHr: number): number[] {
 export function resolveZoneConfig(
   explicitMaxHr: number | null | undefined,
   fitZone: { maxHr?: number; boundaries?: number[] } | null | undefined,
+  fallbackMaxHr?: number | null,
 ): ZoneConfig | null {
   if (isPositive(explicitMaxHr)) {
     return { maxHr: explicitMaxHr, source: 'flag', boundaries: boundariesFromMaxHr(explicitMaxHr) };
   }
-  if (!fitZone) return null;
-  const maxHr = isPositive(fitZone.maxHr) ? fitZone.maxHr : undefined;
-  const boundaries = validBoundaries(fitZone.boundaries) ? fitZone.boundaries : undefined;
-  if (maxHr == null && boundaries == null) return null;
-  const resolvedMaxHr = maxHr ?? Math.round(boundaries![3]! / 0.9);
-  return { maxHr: resolvedMaxHr, source: 'fit', boundaries: boundaries ?? boundariesFromMaxHr(resolvedMaxHr) };
+  if (fitZone) {
+    const maxHr = isPositive(fitZone.maxHr) ? fitZone.maxHr : undefined;
+    const boundaries = validBoundaries(fitZone.boundaries) ? fitZone.boundaries : undefined;
+    if (maxHr == null && boundaries == null) return null;
+    const resolvedMaxHr = maxHr ?? Math.round(boundaries![3]! / 0.9);
+    return { maxHr: resolvedMaxHr, source: 'fit', boundaries: boundaries ?? boundariesFromMaxHr(resolvedMaxHr) };
+  }
+  // Sidste udfald: den højeste puls i eksporten. Den er et gæt — ikke urets
+  // egen max-puls — men den er bedre end ingen zoner, og kilden står i
+  // headeren, så ingen agent kan læse den som en værdi der kom andet steds fra.
+  if (isPositive(fallbackMaxHr)) {
+    return {
+      maxHr: fallbackMaxHr,
+      source: 'export-observation',
+      boundaries: boundariesFromMaxHr(fallbackMaxHr),
+    };
+  }
+  return null;
 }
 
 /**

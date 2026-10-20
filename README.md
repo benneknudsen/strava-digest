@@ -2,7 +2,8 @@
 
 Turns a Strava bulk export into one compact training digest — splits, heart-rate
 drift, zones, training load, trends — so an agent can read a whole running
-history for ~14,900 tokens instead of ~28 MB of GPS points.
+history for ~14,500 tokens instead of ~22 MB of GPS data. **442× smaller**, on
+a real 196-run export.
 
 ```bash
 git clone https://github.com/benneknudsen/strava-digest.git && cd strava-digest
@@ -77,9 +78,9 @@ SKILL.md (4 KB)       = instructions. Tells the agent to run the command.
                         Loaded only when relevant. Holds no data.
 
 strava-digest <zip>   = the compression. Runs locally; the agent never opens
-                        the zip. 28 MB of raw data → ~14,900 tokens.
+                        the zip. 22 MB of raw data → ~14,500 tokens.
 
-The digest (14.9 KB)  = what the agent actually reads.
+The digest (51 kB)    = what the agent actually reads.
 ```
 
 The skill is not a replacement for the compression — it is the **binding**
@@ -115,6 +116,42 @@ pace-normalised aerobic decoupling, negative split, pace consistency, zone
 split and training load (`load` = sum(minutes in zone × 1..5)). Across all
 runs you also get a week overview, the last 28 days against the 28 before, and
 totals (longest run, fastest average, biggest gap, overall zone split).
+
+## What it saves
+
+Measured on a real 240-activity export (196 runs) with
+`node scripts/measure-compression.mjs <export.zip>`:
+
+```
+RAW
+  activity files    21.4 MB  (242 files)
+  activities.csv   118.2 kB  (39 files)
+  other            422.3 kB  (5 files)
+  media/             6.0 MB  (19 files, never read)
+  ─────────────────────────
+  raw, no media     21.9 MB  ≈ 6 390 912 tokens
+  of which
+    binary FIT       3.1 MB  unreadable by any model
+    XML (tcx/gpx)   18.3 MB  ≈ 5 341 344 tokens
+
+DIGEST
+  digest            50.9 kB  (52110 bytes)  ≈ 14 475 tokens  (196 runs)
+
+SAVING
+  442× smaller  —  21.9 MB saved, 99.77 % of the raw size
+  442× fewer tokens than the whole export
+  369× fewer tokens than the XML a model can even read
+```
+
+The bytes are exact; the token counts are estimated at ~3.6 characters per
+token, which is close for both XML and the dense machine format.
+
+Two things worth noticing. First, `media/` — 6 MB of photos and videos — is
+never read at all. Second, 3.1 MB of the activity files are **binary FIT**,
+which no model can read at all; the tool parses them, which is the entire
+job. The honest comparison is therefore the 18.3 MB of XML: **369× fewer
+tokens**, and every number in the digest is one the model can actually
+reason about.
 
 ## Flags
 
@@ -156,8 +193,9 @@ header row when it cannot place a column, so a new alias is one line.
 
 **Zones.** `Z1`–`Z5` are 50–100 % of max heart rate. Strava's export does not
 contain the watch's own zone configuration, so without `--max-hr` the tool
-falls back to the highest heart rate it observed in the export and says so.
-Never guess a max HR: a wrong one mislabels every zone.
+falls back to the highest heart rate it observed in the export, and says so in
+the header (`source=export-observation`) and in the notes. A wrong max HR
+mislabels every zone, so pass `--max-hr <your max>` if you know it.
 
 **Localised exports.** The same column arrives as `Average Heart Rate` or
 `Gennemsnitlig puls`, the date as `Oct 12, 2026` or `12. okt. 2026`, and the

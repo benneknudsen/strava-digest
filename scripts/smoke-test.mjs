@@ -148,6 +148,20 @@ try {
   check('uden flag og uden FIT-zoner: ingen konfiguration', resolveZoneConfig(null, undefined), (v) => v === null);
   check('FIT-zoner bruges når flag mangler', resolveZoneConfig(null, { maxHr: 190 }), (v) => v?.source === 'fit' && v?.maxHr === 190);
   check('flag vinder over FIT-zoner', resolveZoneConfig(200, { maxHr: 190 }), (v) => v?.source === 'flag' && v?.maxHr === 200);
+  // Den observerede max-puls er et gæt, så den må aldrig slå urets egne
+  // zoner — men den er bedre end ingen zoner overhovedet.
+  check('observeret max bruges når intet andet findes', resolveZoneConfig(null, undefined, 199), (v) =>
+    v?.source === 'export-observation' && v?.maxHr === 199,
+  );
+  check('observeret max taber mod urets zoner', resolveZoneConfig(null, { maxHr: 190 }, 199), (v) =>
+    v?.source === 'fit' && v?.maxHr === 190,
+  );
+  check('flaget taber ikke mod urets zoner', resolveZoneConfig(200, { maxHr: 190 }, 199), (v) =>
+    v?.source === 'flag' && v?.maxHr === 200,
+  );
+  check('observeret max danner standardgrænser', resolveZoneConfig(null, undefined, 199), (v) =>
+    v?.boundaries.length === 4 && Math.round(v.boundaries[3]) === 179,
+  );
 
   // Zonefordeling pr. løb via analyseRun (max-puls 210, realistisk for
   // fixturens pulsniveauer, så Z2/Z3-grænserne faktisk skærer turene;
@@ -236,6 +250,19 @@ try {
   const cliZones = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240'], { encoding: 'utf8' });
   check('CLI-agent viser zonefordeling', /z=\d/.test(cliZones), (v) => v === true);
   check('CLI-agent markerer zonekilden', cliZones.includes('max_hr=240 source=flag'), (v) => v === true);
+
+  // Uden --max-hr bruger værktøjet den højeste puls i eksporten som
+  // zone-grundlag. Før stod headeren "max_hr=199 source=export-observation"
+  // mens turene havde z=- og load=-, altså en header der løj. Nu skal de
+  // to være enige.
+  const cliNoHr = execFileSync('node', ['src/cli.ts', tmp], { encoding: 'utf8' });
+  const noHrHeader = cliNoHr.match(/^max_hr=(\d+) source=([\w-]+)$/m);
+  check('uden --max-hr er der en max-puls i headeren', noHrHeader?.[1], (v) => v !== undefined);
+  check('uden --max-hr er kilden export-observation', noHrHeader?.[2], (v) => v === 'export-observation');
+  check('uden --max-hr har turene stadig zoner', cliNoHr, (v) =>
+    /^d=.*\sz=[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+/m.test(v),
+  );
+  check('uden --max-hr har turene en load', cliNoHr, (v) => /^d=.*\sload=\d+/m.test(v));
   check('CLI-agent har WINDOW-sektion', cliZones.includes('## WINDOW'), (v) => v === true);
   check('CLI-agent har STATS-sektion', cliZones.includes('## STATS'), (v) => v === true);
   check('CLI-agent har WEEKS-sektion', cliZones.includes('## WEEKS'), (v) => v === true);

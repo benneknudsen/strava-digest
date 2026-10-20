@@ -63,8 +63,8 @@ Every run in the export is included — a coaching agent cannot find trends in
 a sample.
 
 Per-km splits (pace and average heart rate) are included for every run by
-default. On a 196-run export the whole digest is ~14,900 tokens against
-~28 MB of raw data.
+default. On a 196-run export the whole digest is ~51 kB (~14,500 tokens)
+against ~22 MB of raw activity data — 442× smaller.
 
 The output is English. The tool reads exports in the account language
 (English, Danish, German, Swedish/Norwegian, Dutch, French, Spanish).
@@ -112,16 +112,17 @@ is what finds trends, so widen it once the first answer looks right.
 ## Max heart rate and zones
 
 Strava's bulk export does **not** contain the watch's own zone configuration.
-Without `--max-hr` the header shows `max_hr=- source=-` and the zone field is
-empty.
+Without `--max-hr` the tool falls back to the highest heart rate it observed
+in the export and says so: the header reads `max_hr=199 source=export-observation`
+and the notes repeat that it is observed, not the watch's own max.
 
 Ask the user for their max HR and run with `--max-hr <value>` when zones
-matter. Never guess — a wrong max HR mislabels every zone, and the agent
-then reasons confidently on something wrong.
+matter. Never present a guess as fact — a wrong max HR mislabels every zone,
+and the agent then reasons confidently on something wrong.
 
-The highest heart rate observed in the export is a reasonable starting point
-if the user has nothing else, but say that it is observed rather than taken
-from the watch.
+The observed fallback is usually a single spike, so it is often *higher* than
+a real max and makes the training look easier than it is. When the numbers
+matter, ask.
 
 ## Errors worth knowing
 

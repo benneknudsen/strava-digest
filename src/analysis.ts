@@ -20,7 +20,7 @@ export interface RunAnalysis {
   zones: number[] | null;
   zonePct: number[] | null;
   zoneMaxHr: number | null;
-  zoneSource: 'flag' | 'fit' | null;
+  zoneSource: 'flag' | 'fit' | 'export-observation' | null;
   /** true når en zonekonfiguration fandtes — zoner kan stadig mangle uden pulsdata */
   zoneConfigured: boolean;
   avgCadence: number | null;
@@ -62,7 +62,7 @@ export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): Run
   let zones: number[] | null = null;
   let zonePct: number[] | null = null;
   let zoneMaxHr: number | null = null;
-  let zoneSource: 'flag' | 'fit' | null = null;
+  let zoneSource: 'flag' | 'fit' | 'export-observation' | null = null;
   if (zoneCfg) {
     const buckets = zoneSeconds(pts, zoneCfg);
     if (buckets.some((s) => s > 0)) {
