@@ -82,8 +82,8 @@ function load(zoneSeconds: number[] | null): number | null {
 interface WeekBucket {
   week: string;
   runs: number;
-  km: number;
-  movingSec: number;
+  km: number | null;
+  movingSec: number | null;
   load: number;
   hrSum: number;
   hrCount: number;
@@ -99,15 +99,15 @@ function weeklyBuckets(runs: DigestedRun[]): WeekBucket[] {
       {
         week: key,
         runs: 0,
-        km: 0,
-        movingSec: 0,
+        km: null,
+        movingSec: null,
         load: 0,
         hrSum: 0,
         hrCount: 0,
       };
     b.runs += 1;
-    b.km += (run.row.distanceM ?? 0) / 1000;
-    b.movingSec += run.row.movingSec ?? 0;
+    if (run.row.distanceM != null) b.km = (b.km ?? 0) + run.row.distanceM / 1000;
+    if (run.row.movingSec != null) b.movingSec = (b.movingSec ?? 0) + run.row.movingSec;
     const l = load(run.analysis?.zones ?? null);
     if (l != null) b.load += l;
     if (run.row.avgHr != null) {
@@ -125,8 +125,8 @@ function runLine(run: DigestedRun, withSplits: boolean): string {
   const parts: string[] = [];
   parts.push(`d=${row.date.toISOString()}`);
   parts.push(`n=${quote(row.name)}`);
-  parts.push(`km=${n((row.distanceM ?? 0) / 1000, 2)}`);
-  parts.push(`t=${s(row.movingSec ?? 0)}`);
+  parts.push(`km=${row.distanceM != null ? n(row.distanceM / 1000, 2) : MISSING}`);
+  parts.push(`t=${row.movingSec != null ? s(row.movingSec) : MISSING}`);
   const pace =
     row.distanceM && row.distanceM > 0 && row.movingSec != null
       ? row.movingSec / (row.distanceM / 1000)
@@ -157,22 +157,28 @@ function runLine(run: DigestedRun, withSplits: boolean): string {
 /** Vindue-statistik til sammenligning (baseline vs. den foregående periode). */
 function windowSummary(runs: DigestedRun[]): {
   n: number;
-  km: number;
-  movingSec: number;
+  km: number | null;
+  movingSec: number | null;
   pace: number | null;
   avgHr: number | null;
   load: number | null;
   z: number[] | null;
 } {
-  let km = 0;
-  let movingSec = 0;
+  let km: number | null = null;
+  let movingSec: number | null = null;
+  let paceSec = 0;
+  let paceKm = 0;
   const zoneSec = [0, 0, 0, 0, 0];
   let zoneSecTotal = 0;
   let hrSum = 0;
   let hrCount = 0;
   for (const run of runs) {
-    km += (run.row.distanceM ?? 0) / 1000;
-    movingSec += run.row.movingSec ?? 0;
+    if (run.row.distanceM != null) km = (km ?? 0) + run.row.distanceM / 1000;
+    if (run.row.movingSec != null) movingSec = (movingSec ?? 0) + run.row.movingSec;
+    if (run.row.distanceM != null && run.row.distanceM > 0 && run.row.movingSec != null) {
+      paceSec += run.row.movingSec;
+      paceKm += run.row.distanceM / 1000;
+    }
     if (run.analysis?.zones) {
       run.analysis.zones.forEach((v, i) => {
         zoneSec[i]! += v;
@@ -188,7 +194,7 @@ function windowSummary(runs: DigestedRun[]): {
     n: runs.length,
     km,
     movingSec,
-    pace: km > 0 ? movingSec / km : null,
+    pace: paceKm > 0 ? paceSec / paceKm : null,
     avgHr: hrCount ? hrSum / hrCount : null,
     load: load(zoneSecTotal > 0 ? zoneSec : null),
     z: zoneSecTotal > 0 ? zoneSec.map((v) => (v / zoneSecTotal) * 100) : null,
@@ -203,12 +209,15 @@ function windowSummary(runs: DigestedRun[]): {
  */
 function statsSection(runs: DigestedRun[]): string[] {
   const out: string[] = [];
-  const dists = runs.map((r) => (r.row.distanceM ?? 0) / 1000);
-  const totalKm = dists.reduce((a, b) => a + b, 0);
-  const longest = runs.reduce(
-    (best, r) => ((r.row.distanceM ?? 0) > (best?.row.distanceM ?? 0) ? r : best),
-    runs[0],
-  );
+  const dists = runs
+    .map((r) => r.row.distanceM)
+    .filter((d): d is number => d != null)
+    .map((d) => d / 1000);
+  const totalKm = dists.length ? dists.reduce((a, b) => a + b, 0) : null;
+  const runsWithDistance = runs.filter((r) => r.row.distanceM != null);
+  const longest = runsWithDistance.length
+    ? runsWithDistance.reduce((best, r) => (r.row.distanceM! > best.row.distanceM! ? r : best))
+    : undefined;
   const paceRuns = runs.filter((r) => (r.row.distanceM ?? 0) > 0 && r.row.movingSec != null);
   const fastest = paceRuns.reduce(
     (best, r) => {
@@ -265,7 +274,8 @@ function statsSection(runs: DigestedRun[]): string[] {
   out.push(
     `zone_total_pct=${zoneTotal > 0 ? zoneSec.map((v) => n((v / zoneTotal) * 100, 1)).join(',') : MISSING}`,
   );
-  const totalSec = runs.reduce((a, r) => a + (r.row.movingSec ?? 0), 0);
+  const movingSecs = runs.map((r) => r.row.movingSec).filter((v): v is number => v != null);
+  const totalSec = movingSecs.length ? movingSecs.reduce((a, b) => a + b, 0) : null;
   out.push(`moving_time_total=${s(totalSec)} s`);
   return out;
 }
@@ -344,8 +354,14 @@ export function renderAgent(input: AgentInput): string {
   out.push(`recent: ${fmtWin(cur)}`);
   out.push(`previous: ${fmtWin(prev)}`);
   if (cur.n > 0 && prev.n > 0) {
-    const dKm = prev.km > 0 ? ((cur.km - prev.km) / prev.km) * 100 : null;
-    const dLoad = cur.load != null && prev.load ? ((cur.load - prev.load) / prev.load) * 100 : null;
+    const dKm =
+      cur.km != null && prev.km != null && prev.km > 0
+        ? ((cur.km - prev.km) / prev.km) * 100
+        : null;
+    const dLoad =
+      cur.load != null && prev.load != null && prev.load > 0
+        ? ((cur.load - prev.load) / prev.load) * 100
+        : null;
     out.push(
       `change: km=${dKm != null ? n(dKm, 1) : MISSING} % load=${dLoad != null ? n(dLoad, 1) : MISSING} %`,
     );
