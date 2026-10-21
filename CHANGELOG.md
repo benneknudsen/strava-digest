@@ -8,13 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- `--install-skill` no longer mistakes the tool's own output from an older
-  release for a file the user wrote. The skill's `version:` line follows the
-  package version, so every release changed the packaged skill — and a plain
-  upgrade was reported as "your own version is saved in `SKILL.md.bak`", even
-  though no user version existed. The comparison now ignores the `version:`
-  line and the difference between `\n` and `\r\n`, so a plain upgrade is
-  recognised as the tool's own output and leaves no backup behind.
+- `--install-skill` compares the installed file with the packaged skill
+  before it replaces it, ignoring the `version:` line and the difference
+  between `\n` and `\r\n`. A file that differs in nothing else is the tool's
+  own output from an earlier release, so it is replaced without a backup and
+  the message says "the skill was updated". The `version:` line follows the
+  package version, so an upgrade that leaves the skill text unchanged leaves
+  no backup behind. When the skill text itself has changed since the last
+  install, the tool cannot tell whether the installed file was edited, so it
+  copies the file to `SKILL.md.bak`, `SKILL.md.bak.2`, … before replacing it.
+  The contents that were there are kept that way.
 - A file that is about to be replaced is now always kept. Previously, when a
   `SKILL.md.bak` already existed, the current file was overwritten and
   dropped: the user's own edits were gone, and the message still claimed that

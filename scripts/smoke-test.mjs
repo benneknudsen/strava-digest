@@ -427,6 +427,10 @@ try {
   check('anden installation påstår ikke at have gemt en brugerbackup', secondOut, (v) =>
     !v.includes('your own version') && !v.includes('the previous SKILL.md was copied'),
   );
+  // Besked-teksten alene er ikke nok: checken skal også fejle, hvis
+  // installeringen skrev en backup alligevel. Ellers består den, mens
+  // .bak.2 fylder med værktøjets eget output.
+  check('anden installation skriver ingen ny backup', existsSync(`${user.file}.bak.2`), (v) => v === false);
 
   // Opgraderingsstien: den installerede fil er værktøjets eget output fra
   // en ældre pakkeversion. Den afviger kun i version-linjen, som følger
@@ -465,6 +469,26 @@ try {
   );
   check('beskeden påstår ikke at kende ejerskabet', bothOut, (v) =>
     !v.includes('your own version') && !v.includes('your earlier version'),
+  );
+
+  // Tre redigeringer i træk: hver skal overleve i sin egen backup-fil.
+  // .bak, .bak.2 og .bak.3 skal findes med hver sit indhold, og ingen
+  // backup må overskrives af den næste redigering.
+  const three = fakeHome('home-three', '# Min egen skill 1\n');
+  runInstall(three.env);
+  writeFileSync(three.file, '# Min egen skill 2\n');
+  runInstall(three.env);
+  writeFileSync(three.file, '# Min egen skill 3\n');
+  const threeOut = runInstall(three.env);
+  const threeBak = (n) => {
+    const p = n === 1 ? `${three.file}.bak` : `${three.file}.bak.${n}`;
+    return existsSync(p) ? readFileSync(p, 'utf8') : null;
+  };
+  check('tre redigeringer: den første overlever i .bak', threeBak(1), (v) => v === '# Min egen skill 1\n');
+  check('tre redigeringer: den anden overlever i .bak.2', threeBak(2), (v) => v === '# Min egen skill 2\n');
+  check('tre redigeringer: den tredje overlever i .bak.3', threeBak(3), (v) => v === '# Min egen skill 3\n');
+  check('beskeden nævner den tredje backup', threeOut, (v) =>
+    v.includes('the previous SKILL.md was copied to SKILL.md.bak.3'),
   );
 
   let hrErr = null;
