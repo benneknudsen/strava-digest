@@ -1,6 +1,6 @@
 // Smoke-test: genererer syntetiske fixtures (ingen persondata), kører hele
 // pipelinen og fejler hvis nøgletallene ikke stemmer. Kør med `npm test`.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -533,6 +533,92 @@ try {
   const nested = await discoverSources([nestedBase]);
   check('discover: rekursivt indhold tælles fortsat med', nested.find((c) => c.path === join(nestedBase, 'ydre'))?.count ?? null, (v) => v === 1);
   check('discover: rodmappen tæller også rekursivt', nested.find((c) => c.path === nestedBase)?.count ?? null, (v) => v === 1);
+
+  /* ---- regression: stdout gennem en pipe må ikke klippes af ---- */
+
+  // process.exit() afsluttede processen, før asynkrone stdout-skrivninger
+  // var tømt. Alt over pipe-bufferen (64 KiB) forsvandt uden fejlmelding,
+  // så `| less`, `| pbcopy` og agenter fik et afkortet digest. Samme digest
+  // skrives derfor gennem en pipe og til en fil, og byte-længderne skal
+  // være identiske: intet må tabes i pipen.
+  const bigDir = join(tmp, 'stor');
+  mkdirSync(bigDir, { recursive: true });
+  execFileSync('node', ['scripts/make-fixtures.mjs', bigDir, '800'], { stdio: 'inherit' });
+  const bigPiped = execFileSync('node', ['src/cli.ts', bigDir, '--format', 'md'], {
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  // Digestet skrives uden for eksportmappen, så begge CLI-kørsler ser
+  // præcis den samme mappe. Lå det ligge i eksporten, ville den anden
+  // kørsel læse en mappe, der ikke ligner den første.
+  const outDir = join(tmp, 'ud');
+  mkdirSync(outDir, { recursive: true });
+  const bigFile = join(outDir, 'digest.md');
+  execFileSync('node', ['src/cli.ts', bigDir, '--format', 'md', '--out', bigFile]);
+  const pipedBytes = Buffer.byteLength(bigPiped, 'utf8');
+  check('stort digest er tydeligt over pipe-bufferen (64 KiB)', pipedBytes, (v) => v > 2 * 65536);
+  check('pipe giver samme længde som --out', pipedBytes, (v) => v === statSync(bigFile).size);
+
+  // En læser der lukker pipen tidligt — `| head`, `| less` og et tryk på `q`
+  // — giver EPIPE i skriveren. Det er ikke en fejl: læseren fik det, den
+  // ville have. Testen efterligner `head` i Node i stedet for med en
+  // shell-pipe, så den også kan køre på Windows: læs den første chunk,
+  // luk røret, og se hvad CLI'en gør. Uden EPIPE-håndteringen dør den med
+  // en stacktrace og exit 1.
+  //
+  // Den første `data`-chunk er ikke 4096 bytes: den er lige så stor som
+  // pipe-bufferen (64 KiB på Linux og macOS), fordi læseren står klar
+  // med det samme. Tærsklen nedenfor er derfor et minimum, ikke det
+  // antal bytes der faktisk læses, og `read` er begrænset af bufferen —
+  // ikke af digestets længde.
+  const earlyClose = await new Promise((resolve) => {
+    const child = spawn('node', ['src/cli.ts', bigDir, '--format', 'md'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    let read = 0;
+    // Bevis på at røret blev lukket under skrivningen: barnet var
+    // stadig levende, da læseren lukkede. Et barn der havde skrevet
+    // hele digestet, ville være afsluttet.
+    let aliveAtClose = false;
+    let timedOut = false;
+    let timer;
+    const finish = (code, finalStderr = stderr) => {
+      clearTimeout(timer);
+      resolve({ code, stderr: finalStderr, read, aliveAtClose, timedOut });
+    };
+    // Uden timeout hænger CI, hvis barnet en dag stopper med at svare.
+    // 60 sekunder er langt nok til denne kørsel på en langsom maskine.
+    timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      // Nødudløsning: hvis barnet ikke dør, må testen alligevel ikke
+      // hænge. Timeren er unref'et, så den holder ikke event loop i live.
+      setTimeout(() => finish(null), 5_000).unref();
+    }, 60_000);
+    child.stdout.on('data', (chunk) => {
+      read += chunk.length;
+      if (read >= 4096) {
+        aliveAtClose = child.exitCode === null && child.signalCode === null;
+        child.stdout.destroy();
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (err) => finish(null, stderr + err.message));
+    child.on('close', (code) => finish(code));
+  });
+  check('barnet afsluttede inden timeout', earlyClose.timedOut ? `timeout (${earlyClose.read} bytes læst)` : 'ok', (v) => v === 'ok');
+  check('lukket pipe tidligt (som | head) giver exit 0', earlyClose.timedOut ? 'timeout' : earlyClose.code, (v) => v === 0);
+  check('lukket pipe tidligt giver ingen stderr', earlyClose.stderr, (v) => v === '');
+  // Den tredje check skal sige noget om produktet, ikke om fixtureen.
+  // `read < pipedBytes` passerer per konstruktion, fordi read er
+  // afgrænset af pipe-bufferen. Det egentlige bevis for at skrivningen
+  // blev afbrudt, er at barnet stadig var levende, da røret blev
+  // lukket: så fik skriveren EPIPE midt i sit output, og de to checks
+  // ovenfor (exit 0, ingen stderr) målte den håndtering.
+  check('røret blev lukket mens barnet stadig skrev', earlyClose.aliveAtClose, (v) => v === true);
 
   // FIT-vejen på en rigtig binær fil (offentlig fixture, se README)
   const fitBuffer = await readFile(new URL('../fixtures/sample.fit', import.meta.url));

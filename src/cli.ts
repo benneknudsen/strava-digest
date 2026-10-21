@@ -420,7 +420,7 @@ async function emitDigest(input: DigestInput, args: Args): Promise<number> {
     const target = resolve(args.out);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, output, 'utf8');
-    console.error(`wrote ${target} (${output.length} bytes)`);
+    console.error(`wrote ${target} (${Buffer.byteLength(output, 'utf8')} bytes)`);
   } else {
     process.stdout.write(output);
   }
@@ -503,9 +503,21 @@ async function zoneStatus(source: ExportSource, root: string, filename: string):
   }
 }
 
+// process.exit() afbryder asynkrone stdout-skrivninger, så alt over
+// pipe-bufferen (64 KiB) blev klippet af uden fejlmelding. Med exitCode
+// får Node lov til at tømme stdout, før processen afslutter af sig selv.
+// En læser der lukker pipen tidligt (| head, | less og 'q') giver EPIPE.
+// Det er ikke en fejl — læseren fik det den ville have.
+process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EPIPE') return;
+  throw err;
+});
+
 main()
-  .then((code) => process.exit(code))
+  .then((code) => {
+    process.exitCode = code;
+  })
   .catch((err) => {
     console.error(err instanceof Error ? err.message : err);
-    process.exit(1);
+    process.exitCode = 1;
   });

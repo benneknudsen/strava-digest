@@ -5,6 +5,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const root = process.argv[2] ?? 'fixtures/build';
+// Valgfrit antal ekstra syntetiske løb (CSV-rækker uden sporfiler). De gør
+// det muligt at bygge et digest, der er tydeligt større end pipe-bufferen
+// på 64 KiB, så trunkerings-testen i smoke-test.mjs har noget at måle på.
+const extraRuns = Math.max(0, Math.trunc(Number(process.argv[3] ?? 0)) || 0);
 const dir = (p) => {
   mkdirSync(join(root, p), { recursive: true });
   return join(root, p);
@@ -106,13 +110,39 @@ writeFileSync(
 dir('media');
 writeFileSync(join(root, 'media/photo.jpg'), 'not-a-real-jpeg');
 
-const csv = [
-  englishHeaders.join(','),
+const rows = [
   row({ id: 1001, date: 'Oct 12, 2026, 6:32:10 AM', name: 'Lang tur', type: 'Run', elapsed: 3380, moving: 3360, distanceKm: 10.0, maxHr: 174, avgHr: 156, re: 92, elev: 41, cal: 690, cad: 84, gear: 'Nike Pegasus 41', filename: 'Run-1001.gpx' }),
   row({ id: 1002, date: 'Oct 9, 2026, 6:05:00 AM', name: 'Tempo', type: 'Run', elapsed: 1600, moving: 1580, distanceKm: 6.0, maxHr: 181, avgHr: 168, re: 78, elev: 12, cal: 420, cad: 88, gear: 'Nike Vaporfly', filename: 'Run-1002.tcx' }),
   row({ id: 1003, date: 'Oct 7, 2026, 7:15:00 AM', name: 'Rolig tur', type: 'Run', elapsed: 2760, moving: 2745, distanceKm: 8.0, maxHr: 145, avgHr: 137, re: 44, elev: 30, cal: 520, cad: 82, gear: 'Nike Pegasus 41', filename: 'Run-1003.gpx' }),
   row({ id: 1004, date: 'Oct 6, 2026, 5:40:00 PM', name: 'Cykeltur', type: 'Ride', elapsed: 3600, moving: 3500, distanceKm: 24.5, maxHr: 150, avgHr: 128, re: 60, elev: 120, cal: 600, cad: 90, gear: 'Cykel', filename: 'Ride-1004.fit.gz' }),
-].join('\n');
+];
+// Ekstra løb uden sporfiler: metadata kommer fra CSV'en, analysen udelades
+// med en note. Det er nok til at måle, om stdout overlever en pipe.
+// Datoerne går baglæns fra 2024-01-01, så historikken ligger i fortiden
+// som en rigtig træningshistorik.
+for (let i = 0; i < extraRuns; i++) {
+  rows.push(
+    row({
+      id: 2000 + i,
+      date: new Date(Date.UTC(2024, 0, 1, 6, 0, 0) - i * 86_400_000).toISOString(),
+      name: `Syntetisk tur ${i + 1}`,
+      type: 'Run',
+      elapsed: 3000,
+      moving: 2980,
+      distanceKm: (9 + (i % 5) * 0.5).toFixed(1),
+      maxHr: 170,
+      avgHr: 150,
+      re: 60,
+      elev: 20,
+      cal: 500,
+      cad: 84,
+      gear: 'Nike Pegasus 41',
+      filename: `Extra-${2000 + i}.gpx`,
+    }),
+  );
+}
+
+const csv = [englishHeaders.join(','), ...rows].join('\n');
 
 writeFileSync(join(root, 'activities.csv'), `${csv}\n`);
 console.log(`fixtures skrevet til ${root}`);
