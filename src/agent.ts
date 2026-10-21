@@ -24,8 +24,13 @@ export interface AgentInput {
   sourceLabel: string;
   activitiesInExport: number;
   runsTotal: number;
-  /** Alle løb i eksporten, nyeste først. */
+  /** De løb der beskrives linje for linje (--last), nyeste først. */
   runs: DigestedRun[];
+  /**
+   * Alle løb i eksporten, nyeste først. WEEKS, WINDOW og STATS regnes herfra,
+   * så --last kun begrænser hvilke løb der beskrives — ikke hvad der tælles.
+   */
+  allRuns: DigestedRun[];
   /** Hvor mange af de nyeste løb der får fuld split-opdeling. */
   detailCount: number;
   baselineDays: number;
@@ -283,20 +288,24 @@ export function renderAgent(input: AgentInput): string {
   const out: string[] = [];
   // Sorter selv: digesten skal være deterministisk uanset rækkefølgen på
   // inputtet. Nyeste først.
-  const runs = [...input.runs].sort(
-    (a, b) => b.row.date.getTime() - a.row.date.getTime() || (a.row.name < b.row.name ? -1 : 1),
-  );
-  const newest = runs[0]?.row.date;
+  const sortNewestFirst = (list: DigestedRun[]): DigestedRun[] =>
+    [...list].sort(
+      (a, b) => b.row.date.getTime() - a.row.date.getTime() || (a.row.name < b.row.name ? -1 : 1),
+    );
+  const runs = sortNewestFirst(input.runs);
+  const allRuns = sortNewestFirst(input.allRuns);
+  const newest = allRuns[0]?.row.date;
   const cutoff = newest
     ? newest.getTime() - input.baselineDays * 86_400_000
     : Number.POSITIVE_INFINITY;
 
   // Ugeaggregat først: det er det tætteste overblik, og det gør, at
-  // agenten kan se tendenser uden at læse 195 rækker.
-  const weeks = weeklyBuckets(runs);
+  // agenten kan se tendenser uden at læse 195 rækker. Aggregatet dækker
+  // hele eksporten, ikke kun de løb --last valgte at beskrive.
+  const weeks = weeklyBuckets(allRuns);
 
-  const current = runs.filter((r) => r.row.date.getTime() > cutoff);
-  const previous = runs.filter(
+  const current = allRuns.filter((r) => r.row.date.getTime() > cutoff);
+  const previous = allRuns.filter(
     (r) => r.row.date.getTime() <= cutoff && r.row.date.getTime() > cutoff - input.baselineDays * 86_400_000,
   );
   const cur = windowSummary(current);
@@ -374,7 +383,7 @@ export function renderAgent(input: AgentInput): string {
   });
   out.push('');
 
-  out.push(...statsSection(runs));
+  out.push(...statsSection(allRuns));
   out.push('');
 
   if (input.contextText.trim()) {
@@ -385,6 +394,11 @@ export function renderAgent(input: AgentInput): string {
 
   out.push('## NOTES');
   for (const note of input.notes) out.push(`- ${note}`);
+  if (runs.length < allRuns.length) {
+    out.push(
+      `- ${allRuns.length} ${allRuns.length === 1 ? 'run is' : 'runs are'} counted in WEEKS, WINDOW and STATS; ${runs.length} ${runs.length === 1 ? 'run is' : 'runs are'} shown (--last).`,
+    );
+  }
   out.push(
     `- zones use max_hr=${input.maxHr ?? MISSING} (${input.maxHrSource ?? 'no source'}). ` +
       'The zone boundaries are 50-100 % of max; they differ from your watch if your watch uses different boundaries.',
