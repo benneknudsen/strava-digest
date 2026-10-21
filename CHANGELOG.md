@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-10-21
+
+### Fixed
+
+- A digest larger than the 64 KiB pipe buffer was silently truncated when it
+  went through a pipe (`| less`, `| pbcopy`, or an agent reading stdout): on a
+  196-run export, only 65536 of 93996 bytes arrived, with no error message.
+  The process exited before Node had finished the asynchronous stdout writes.
+  The CLI now lets Node drain stdout before it exits.
+- The CLI now handles `EPIPE` explicitly. When the process waits for stdout
+  to drain, a reader that closes the pipe early (`| head`, `| less` and then
+  `q`, `| grep -m1`) has already received what it asked for; the CLI exits 0
+  without a stack trace. A regression test closes the pipe early in Node, so
+  it runs on Windows too.
+
 ## [1.0.0] — 2026-10-20
 
 First stable release. The commands, the flags and the exit codes are settled;
