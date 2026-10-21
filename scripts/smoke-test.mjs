@@ -353,6 +353,14 @@ try {
   const skillDir = join(tmp, 'skills', 'strava-digest');
   const instOut = execFileSync('node', [cliPath, '--install-skill', join(tmp, 'skills')], { encoding: 'utf8' });
   check('--install-skill skriver SKILL.md', existsSync(join(skillDir, 'SKILL.md')), (v) => v === true);
+
+  // Skillen installeres fra pakken, saa dens version skal vaere den samme
+  // som pakkens. Ellers ved brugeren ikke hvilken skill der passer til
+  // hvilken vaerktojversion, og de to glider fra hinanden i det stille.
+  const pkgVersion = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version;
+  const skillVersion = (readFileSync(join(repoRoot, 'skills', 'strava-digest', 'SKILL.md'), 'utf8')
+    .match(/^version:\s*(.+)$/m) ?? [])[1];
+  check('skillens version er lig pakkeversionen', skillVersion, (v) => v === pkgVersion);
   check('--install-skill fortæller hvor den landede', instOut.includes('SKILL.md'), (v) => v === true);
   check('--install-skill siger hvad der skal spørges om', instOut.includes('how was my week'), (v) => v === true);
   // Install-outputtet er engelsk, ligesom resten af værktøjets output.
