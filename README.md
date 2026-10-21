@@ -149,6 +149,10 @@ SAVING
 The bytes are exact; the token counts are estimated at ~3.6 characters per
 token, which is close for both XML and the dense machine format.
 
+It takes **0.6 seconds** to read and digest that whole export — 242 activity
+files, 21.9 MB — and the output is deterministic: the same export always
+gives the same digest, byte for byte.
+
 Two things worth noticing. First, `media/` — 6 MB of photos and videos — is
 never read at all. Second, 3.1 MB of the activity files are **binary FIT**,
 which no model can read at all; the tool parses them, which is the entire
@@ -254,3 +258,5 @@ The one binary fixture, `fixtures/sample.fit`, is a public example from
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Changelog: [CHANGELOG.md](CHANGELOG.md)
