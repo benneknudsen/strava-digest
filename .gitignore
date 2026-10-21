@@ -12,3 +12,6 @@ runs/
 !fixtures/sample.fit
 .DS_Store
 context.md
+
+# oc-review: review-fund og briefs (findings skal aldrig faae ind i git)
+.cc-review/
