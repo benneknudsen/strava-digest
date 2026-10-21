@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-10-21
+
+### Fixed
+
+- `--install-skill` compares the installed file with the packaged skill
+  before it replaces it, ignoring the `version:` line and the difference
+  between `\n` and `\r\n`. A file that differs in nothing else is the tool's
+  own output from an earlier release, so it is replaced without a backup and
+  the message says "the skill was updated". The `version:` line follows the
+  package version, so an upgrade that leaves the skill text unchanged leaves
+  no backup behind. When the skill text itself has changed since the last
+  install, the tool cannot tell whether the installed file was edited, so it
+  copies the file to `SKILL.md.bak`, `SKILL.md.bak.2`, … before replacing it.
+  The contents that were there are kept that way.
+- A file that is about to be replaced is now always kept. Previously, when a
+  `SKILL.md.bak` already existed, the current file was overwritten and
+  dropped: the user's own edits were gone, and the message still claimed that
+  an earlier version was in the backup. The current file is now copied to
+  `SKILL.md.bak`, or to `SKILL.md.bak.2`, `SKILL.md.bak.3`, … when that name
+  is taken. An existing backup is never overwritten.
+- The install message now describes what happened instead of guessing who
+  owns the file: "the previous SKILL.md was copied to `SKILL.md.bak`" — with
+  the name of the file that was actually written. The tool cannot know
+  whether the old file was the user's own or the tool's output from an older
+  release, so it no longer claims to know.
+
 ## [1.0.1] — 2026-10-21
 
 ### Fixed
