@@ -233,6 +233,11 @@ try {
   check('CLI viser HR-drift som felt', /drift=-?\d/.test(cli), (v) => v === true);
   check('CLI uden max-puls: zonefelt er tomt', cli.includes('z=-'), (v) => v === true);
   check('CLI-agent har én linje pr. løb', (cli.match(/^d=\d{4}-/gm) ?? []).length, (v) => v === 2);
+  check('CLI --last 2: WINDOW tæller alle 3 løb', cli, (v) => /recent: n=3 /.test(v));
+  check('CLI --last 2: STATS tæller alle 3 løb', cli, (v) => v.includes('runs=3 km_total='));
+  check('CLI --last 2: NOTES siger talt mod vist', cli, (v) =>
+    v.includes('3 runs are counted in WEEKS, WINDOW and STATS; 2 runs are shown (--last).'),
+  );
 
   // Markdown-formatet er stadig tilgængeligt med --format md
   const cliMd = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--format', 'md'], { encoding: 'utf8' });
@@ -263,6 +268,8 @@ try {
     /^d=.*\sz=[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+/m.test(v),
   );
   check('uden --max-hr har turene en load', cliNoHr, (v) => /^d=.*\sload=\d+/m.test(v));
+  check('CLI uden --last: WINDOW tæller alle 3 løb', cliNoHr, (v) => /recent: n=3 /.test(v));
+  check('CLI uden --last: ingen talt/vist-note', cliNoHr, (v) => !v.includes('shown (--last)'));
 
   // Agenten laeser SCHEMA og SIGNALS og fortolker derfra. Hvis de ikke
   // siger, at "max" kan vaere det observerede gaet, vaesker agenten
@@ -524,6 +531,15 @@ try {
 
   const looseZones = execFileSync('node', ['src/cli.ts', looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });
   check('loose: zoner med --max-hr', looseZones, (v) => /z=\d/.test(v) && v.includes('max_hr=240 source=flag'));
+
+  // --last begrænser kun de løb der beskrives. WEEKS, WINDOW og STATS skal
+  // stadig tælle hele mappen, også når kun de to nyeste vises.
+  const looseLast = execFileSync('node', ['src/cli.ts', looseDir, '--last', '2'], { encoding: 'utf8' });
+  check('loose --last 2: WINDOW tæller alle 3 løb', looseLast, (v) => /recent: n=3 /.test(v));
+  check('loose --last 2: STATS tæller alle 3 løb', looseLast, (v) => v.includes('runs=3 km_total='));
+  check('loose --last 2: NOTES siger talt mod vist', looseLast, (v) =>
+    v.includes('3 runs are counted in WEEKS, WINDOW and STATS; 2 runs are shown (--last).'),
+  );
 
   const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
   check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zones: no'));
@@ -921,6 +937,7 @@ try {
     activitiesInExport: 3,
     runsTotal: 3,
     runs: agentRuns,
+    allRuns: agentRuns,
     detailCount: 1,
     baselineDays: 28,
     contextText: 'plan: 3 løb/uge',
@@ -949,6 +966,23 @@ try {
   check('agent: feltnavne er konsistente', agentOut.includes('pace=') && agentOut.includes('drift=') && agentOut.includes('half='), (v) => v === true);
   check('agent: notes-sektion findes', agentOut.includes('## NOTES'), (v) => v === true);
 
+  // Uden --last er de viste løb og populationen de samme, så WEEKS,
+  // WINDOW og STATS skal give præcis de samme tal som før ændringen.
+  check('agent: WEEKS uændret uden --last', agentOut, (v) =>
+    v.includes('w=2026-W42 r=3 km=23.0 t=9200 load=213 hr=148') &&
+    v.includes('w=2026-W41 r=1 km=6.0 t=2400 load=71 hr=145'),
+  );
+  check('agent: WINDOW uændret uden --last', agentOut, (v) =>
+    v.includes('recent: n=4 km=29.0 t=11600 pace=400.0 hr=148 load=284 z=3.2,64.5,32.3,0.0,0.0') &&
+    v.includes('previous: n=0 km=- t=- pace=- hr=- load=- z=-'),
+  );
+  check('agent: STATS uændret uden --last', agentOut, (v) =>
+    v.includes('runs=4 km_total=29.0 median_km=8.00'),
+  );
+  check('agent: ingen talt/vist-note uden --last', agentOut, (v) =>
+    !v.includes('shown (--last)'),
+  );
+
   // Regression (issue #11): en manglende distance eller tid er ukendt, ikke
   // nul. Et rigtigt nul skal fortsat vises som nul, så de to må ikke smelte
   // sammen.
@@ -961,6 +995,7 @@ try {
     activitiesInExport: 2,
     runsTotal: 2,
     runs: [missingRun, zeroRun],
+    allRuns: [missingRun, zeroRun],
     detailCount: 1,
     baselineDays: 28,
     contextText: '',
@@ -986,6 +1021,7 @@ try {
     activitiesInExport: 1,
     runsTotal: 1,
     runs: [missingRun],
+    allRuns: [missingRun],
     detailCount: 1,
     baselineDays: 28,
     contextText: '',
@@ -1014,6 +1050,7 @@ try {
     activitiesInExport: 2,
     runsTotal: 2,
     runs: [pacedRun, timeOnlyRun],
+    allRuns: [pacedRun, timeOnlyRun],
     detailCount: 1,
     baselineDays: 28,
     contextText: '',
@@ -1028,6 +1065,87 @@ try {
   check('agent: WEEKS summerer kendte værdier i blandet population', mixedOut, (v) =>
     /w=2026-W42 r=2 km=10\.0 t=4800 /.test(v),
   );
+
+  // Regression (issue #13): --last begrænser hvilke løb der BESKRIVES,
+  // ikke hvilke løb WEEKS, WINDOW og STATS TÆLLER. Den gamle kode sendte
+  // kun de viste løb til renderAgent, så "sidste 28 dage" blev et udsnit
+  // og sammenligningen mod de 28 dage før blev usand.
+  const population = [
+    mkRun('2026-10-16T10:00:00Z', 'Nyeste', 10, 4000, 155, 175, 88, 50),
+    mkRun('2026-10-14T10:00:00Z', 'Midterste', 8, 3200, 150, 170, 92, 40),
+    // Uden for de seneste 28 dage, men inde i de 28 dage før dem.
+    mkRun('2026-09-01T10:00:00Z', 'Gammel', 6, 2400, 145, 165, 70, 20),
+  ];
+  const lastOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 3,
+    runsTotal: population.length,
+    runs: population.slice(0, 1),
+    allRuns: population,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent --last: WEEKS tæller hele populationen', lastOut, (v) =>
+    /w=2026-W42 r=2 /.test(v) && /w=2026-W36 r=1 /.test(v),
+  );
+  check('agent --last: WINDOW recent tæller alle i vinduet', lastOut, (v) =>
+    /recent: n=2 km=18\.0 t=7200 pace=400\.0 hr=153 load=142 /.test(v),
+  );
+  check('agent --last: WINDOW previous tæller løb uden for vinduet', lastOut, (v) =>
+    /previous: n=1 km=6\.0 t=2400 pace=400\.0 hr=145 load=71 /.test(v),
+  );
+  check('agent --last: change beregnes på hele populationen', lastOut, (v) =>
+    v.includes('change: km=200.0 % load=100.0 %'),
+  );
+  check('agent --last: STATS tæller hele populationen', lastOut, (v) =>
+    v.includes('runs=3 km_total=24.0 median_km=8.00'),
+  );
+  check('agent --last: kun de viste løb får linjer', (lastOut.match(/^d=\d{4}-/gm) ?? []).length, (v) => v === 1);
+  check('agent --last: NOTES siger talt mod vist', lastOut, (v) =>
+    v.includes('3 runs are counted in WEEKS, WINDOW and STATS; 1 run is shown (--last).'),
+  );
+
+  // Vinduesgrænserne: recent bruger `> cutoff`, previous bruger
+  // `<= cutoff && > cutoff - 28 dage`. Løbet præcis på cutoff hører derfor
+  // til previous, og et løb ældre end begge vinduer tælles ingen steder.
+  const boundaryNewest = new Date('2026-10-16T10:00:00Z');
+  const boundaryCutoff = new Date(boundaryNewest.getTime() - 28 * 86_400_000);
+  const boundaryPopulation = [
+    mkRun(boundaryNewest.toISOString(), 'Nyeste', 10, 4000, 155, 175, 88, 50),
+    mkRun(boundaryCutoff.toISOString(), 'Præcis cutoff', 8, 3200, 150, 170, 92, 40),
+    // 60 dage gammelt: uden for både recent og previous.
+    mkRun(new Date(boundaryNewest.getTime() - 60 * 86_400_000).toISOString(), 'For gammel', 6, 2400, 145, 165, 70, 20),
+  ];
+  const boundaryOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 3,
+    runsTotal: boundaryPopulation.length,
+    runs: boundaryPopulation,
+    allRuns: boundaryPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: løb præcis på cutoff tælles ikke i recent (recent bruger >)', boundaryOut, (v) =>
+    /recent: n=1 km=10\.0 /.test(v),
+  );
+  check('agent: løb præcis på cutoff tælles i previous', boundaryOut, (v) =>
+    /previous: n=1 km=8\.0 /.test(v),
+  );
+  check('agent: løb ældre end 56 dage tælles hverken i recent eller previous', boundaryOut, (v) => {
+    const recent = v.match(/^recent: .*$/m)?.[0] ?? '';
+    const previous = v.match(/^previous: .*$/m)?.[0] ?? '';
+    return /n=1 km=10\.0 /.test(recent) && /n=1 km=8\.0 /.test(previous);
+  });
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });

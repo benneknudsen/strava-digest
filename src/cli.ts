@@ -36,7 +36,7 @@ const HELP = `strava-digest — activity files or a Strava export (zip) -> compa
   strava-digest <export.zip|folder|activity-file|activity-folder> [flags]
   strava-digest            interactive picker, when run in a terminal
 
-  --last N        number of runs in the digest (default: all)
+  --last N        describe only the newest N runs; WEEKS, WINDOW and STATS still cover the whole export
   --detail N      only the newest N runs get per-km splits (default: all)
   --all           include all activity types, not just runs
   --list          show only the index of activities
@@ -286,7 +286,7 @@ async function runBulk(
       : undefined,
   };
 
-  return emitDigest(input, args);
+  return emitDigest(input, args, analysed);
 }
 
 /* ------------------------------------------------- løse aktivitetsfiler */
@@ -395,10 +395,14 @@ async function runLoose(
     hostNote: notes.join(' '),
   };
 
-  return emitDigest(digestInput, args);
+  return emitDigest(digestInput, args, pool);
 }
 
-async function emitDigest(input: DigestInput, args: Args): Promise<number> {
+async function emitDigest(
+  input: DigestInput,
+  args: Args,
+  allRuns: DigestedRun[],
+): Promise<number> {
   const output = args.json
     ? `${JSON.stringify({ ...input, markdown: renderMarkdown(input) }, null, 2)}\n`
     : args.format === 'md'
@@ -408,6 +412,7 @@ async function emitDigest(input: DigestInput, args: Args): Promise<number> {
           activitiesInExport: input.activitiesInExport,
           runsTotal: input.runsTotal ?? input.runs.length,
           runs: input.runs,
+          allRuns,
           detailCount: args.detail,
           baselineDays: input.baselineDays,
           contextText: input.contextText,
