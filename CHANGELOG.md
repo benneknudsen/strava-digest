@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-10-20
+
+First stable release. The commands, the flags and the exit codes are settled;
+1.x will not break your command line.
+
+The agent format has its own version, in the first line of the digest
+(`STRAVA DIGEST v2`). That one can move on its own, and an agent that caches
+it should check that line and read `SCHEMA` and `SIGNALS` again when it
+changes. A format change is not a package change.
+
+### Changed since 0.1.0
+
+- `SCHEMA` and `SIGNALS` now say what "max" means in the zone split. If the
+  header says `source=export-observation`, the boundaries come from the
+  highest heart rate in the export, not the user's real max — usually a
+  single spike, so the training looks easier than it is. An agent reading
+  only the old text would have read the zones as if they were the user's
+  own.
+- The agent format no longer lists Strava's unused column names; it counts
+  them and points at the Markdown format for the list. The digest is smaller
+  and the model gets no Danish column names in its context.
+
 ## [0.1.0] — 2026-10-20
 
 First release.

@@ -264,6 +264,14 @@ try {
   );
   check('uden --max-hr har turene en load', cliNoHr, (v) => /^d=.*\sload=\d+/m.test(v));
 
+  // Agenten laeser SCHEMA og SIGNALS og fortolker derfra. Hvis de ikke
+  // siger, at "max" kan vaere det observerede gaet, vaesker agenten
+  // zonerne som om de la paa brugerens rigtige max-puls. Det er præcis
+  // den fejltolkning, der gør træningen se lettere ud end den er.
+  check('SIGNALS forklarer at max kan vaere et gaet', cliNoHr, (v) =>
+    v.includes('export-observation') && v.includes('not the user') && v.includes('spike'),
+  );
+
   // Agent-formatet skal ikke dumpe Stravas kolonnenavne i modellens kontekst.
   // Det er diagnostik, ikke træningsdata — tallet og en henvisning er nok.
   // Derfor laves der en eksport med en ekstra, ukendt kolonne.

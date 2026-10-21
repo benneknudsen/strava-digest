@@ -2,7 +2,7 @@
 
 Turns a Strava bulk export into one compact training digest — splits, heart-rate
 drift, zones, training load, trends — so an agent can read a whole running
-history for ~14,000 tokens instead of ~22 MB of GPS data. **457× smaller**, on
+history for ~14,000 tokens instead of ~22 MB of GPS data. **454× smaller**, on
 a real 196-run export.
 
 ```bash
@@ -138,12 +138,12 @@ RAW
     XML (tcx/gpx)   18.3 MB  ≈ 5 341 344 tokens
 
 DIGEST
-  digest            49.2 kB  (50349 bytes)  ≈ 13 986 tokens  (196 runs)
+  digest            49.4 kB  (50624 bytes)  ≈ 14 062 tokens  (196 runs)
 
 SAVING
-  457× smaller  —  21.9 MB saved, 99.78 % of the raw size
-  457× fewer tokens than the whole export
-  382× fewer tokens than the XML a model can even read
+  454× smaller  —  21.9 MB saved, 99.78 % of the raw size
+  454× fewer tokens than the whole export
+  380× fewer tokens than the XML a model can even read
 ```
 
 The bytes are exact; the token counts are estimated at ~3.6 characters per
@@ -156,7 +156,7 @@ gives the same digest, byte for byte.
 Two things worth noticing. First, `media/` — 6 MB of photos and videos — is
 never read at all. Second, 3.1 MB of the activity files are **binary FIT**,
 which no model can read at all; the tool parses them, which is the entire
-job. The honest comparison is therefore the 18.3 MB of XML: **382× fewer
+job. The honest comparison is therefore the 18.3 MB of XML: **380× fewer
 tokens**, and every number in the digest is one the model can actually
 reason about.
 
@@ -259,4 +259,20 @@ The one binary fixture, `fixtures/sample.fit`, is a public example from
 
 MIT — see [LICENSE](LICENSE).
 
-Changelog: [CHANGELOG.md](CHANGELOG.md)
+## Versions
+
+There are two, and they mean different things.
+
+**The package version** (`1.0.0`) is the tool: the commands, the flags, the
+exit codes. It follows semver, so 1.x will not break your command line.
+
+**The agent format version** (`STRAVA DIGEST v2`, in the first line of the
+digest) is the shape of the data — the field names, what they mean, what a
+missing value looks like. It can move on its own. An agent that caches the
+format should check that line and read `SCHEMA` and `SIGNALS` again when it
+changes.
+
+A format change is not a package change: a digest can be `v2` from a `1.4.0`
+package.
+
+## Changelog: [CHANGELOG.md](CHANGELOG.md)

@@ -64,7 +64,7 @@ a sample.
 
 Per-km splits (pace and average heart rate) are included for every run by
 default. On a 196-run export the whole digest is ~49 kB (~14,000 tokens)
-against ~22 MB of raw activity data — 457× smaller.
+against ~22 MB of raw activity data — 454× smaller.
 
 The output is English. The tool reads exports in the account language
 (English, Danish, German, Swedish/Norwegian, Dutch, French, Spanish).
@@ -133,7 +133,12 @@ matter, ask.
   one line in `src/columns.ts`.
 - A run line containing `err=` means that file could not be read. The rest of
   the digest is still valid.
-- `z=-` means missing zone configuration, not that the run had no heart rate.
+- `z=-` means the run has no heart-rate data to zone. The zone boundaries
+  themselves are never missing: without `--max-hr` they come from the highest
+  heart rate in the export.
+- When the header says `source=export-observation`, the zone boundaries are a
+  guess — usually a single spike, often higher than a real max, so the
+  training looks easier than it is. Say so when you use the zone split.
 
 ## What not to do
 

@@ -325,6 +325,9 @@ export function renderAgent(input: AgentInput): string {
   out.push('cv: pace consistency in %. < 3 = steady | 3-5 = variable | > 5 = uneven (hills, stops, trail).');
   out.push('load: sum(minutes in zone * 1..5). Compare week to week; a jump > 20 % is a load risk.');
   out.push('z: percent of moving time in each heart-rate zone. Z1 50-60 %, Z2 60-70 %, Z3 70-80 %, Z4 80-90 %, Z5 90-100 % of max.');
+  out.push('  "max" is whichever max_hr the header names. If source=export-observation it is the highest');
+  out.push('  heart rate found in the export, not the user\'s real max: usually a single spike, so it is');
+  out.push('  often too high, which makes the training look easier than it is. Say so when you use z.');
   out.push('');
 
   out.push('## WEEKS (newest first)');
