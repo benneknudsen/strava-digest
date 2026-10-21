@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-10-21
+
+### Fixed
+
+- Number fields in German and Dutch exports were read with the wrong scale:
+  `1.234` became 1.234 (1000× too small) and `2.345.678` became 2.345. They
+  are now read as 1234 and 2345678.
+- The separator rule is applied per value, not per account locale. When both
+  `,` and `.` appear, the rightmost one is the decimal separator; otherwise a
+  repeated separator, or a 1-3 digit group before a 3-digit tail, is a
+  thousands separator, and everything else is decimal. `1.234` is therefore
+  German thousands, 1234, never English 1.234. A test covers the rule directly
+  on the number format.
+
 ## [1.0.2] — 2026-10-21
 
 ### Fixed

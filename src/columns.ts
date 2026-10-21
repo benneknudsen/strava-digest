@@ -303,8 +303,37 @@ export function raw(row: string[], map: ColumnMap, field: Field): string {
 export function num(row: string[], map: ColumnMap, field: Field): number | null {
   const v = raw(row, map, field).replace(/[^\d.,-]/g, '').replace(/\s/g, '');
   if (!v) return null;
-  // "1,234.5" (en) vs "1.234,5" (da)
-  const normalized = /,\d{1,2}$/.test(v) ? v.replace(/\./g, '').replace(',', '.') : v.replace(/,/g, '');
+  // Per-value rule, not per account locale: num() receives no locale. When
+  // both "," and "." appear, the rightmost is the decimal separator, so
+  // "1,234.5" (en) and "1.234,5" (de/da) both become 1234.5. With one kind of
+  // separator, a repeated separator ("2.345.678") and a 1-3 digit group
+  // before a 3-digit tail ("1.234", "1,234", "1,234,567") are thousands;
+  // everything else is decimal ("10.5", "12,5", "0.123"). So "1.234" is
+  // German/Dutch 1234, never English 1.234.
+  let normalized: string;
+  const comma = v.lastIndexOf(',');
+  const dot = v.lastIndexOf('.');
+  if (comma >= 0 && dot >= 0) {
+    const decimal = comma > dot ? ',' : '.';
+    const thousands = decimal === ',' ? '.' : ',';
+    normalized = v.split(thousands).join('').replace(decimal, '.');
+  } else {
+    const sep = comma >= 0 ? ',' : dot >= 0 ? '.' : '';
+    if (!sep) {
+      normalized = v;
+    } else {
+      const parts = v.split(sep);
+      const [head = '', tail = ''] = parts;
+      const headDigits = head.replace(/^-/, '');
+      const grouped =
+        parts.length === 2 &&
+        tail.length === 3 &&
+        headDigits.length >= 1 &&
+        headDigits.length <= 3 &&
+        headDigits[0] !== '0';
+      normalized = parts.length > 2 || grouped ? parts.join('') : `${head}.${tail}`;
+    }
+  }
   const n = Number.parseFloat(normalized);
   return Number.isFinite(n) ? n : null;
 }
