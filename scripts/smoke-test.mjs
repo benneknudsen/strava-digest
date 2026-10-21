@@ -948,6 +948,86 @@ try {
   check('agent: ingen dansk komma i decimal', !/km=\d+,\d/.test(agentOut), (v) => v === true);
   check('agent: feltnavne er konsistente', agentOut.includes('pace=') && agentOut.includes('drift=') && agentOut.includes('half='), (v) => v === true);
   check('agent: notes-sektion findes', agentOut.includes('## NOTES'), (v) => v === true);
+
+  // Regression (issue #11): en manglende distance eller tid er ukendt, ikke
+  // nul. Et rigtigt nul skal fortsat vises som nul, så de to må ikke smelte
+  // sammen.
+  const missingRun = mkRun('2026-10-15T10:00:00Z', 'Uden distance og tid', 5, 2000, 140, 160, 70, 20);
+  missingRun.row.distanceM = null;
+  missingRun.row.movingSec = null;
+  const zeroRun = mkRun('2026-10-15T12:00:00Z', 'Nul distance og tid', 0, 0, 140, 160, 70, 20);
+  const edgeOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 2,
+    runsTotal: 2,
+    runs: [missingRun, zeroRun],
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  const runLineFor = (name) =>
+    edgeOut.split('\n').find((line) => line.startsWith('d=') && line.includes(`n="${name}"`)) ?? '';
+  const missingLine = runLineFor('Uden distance og tid');
+  const zeroLine = runLineFor('Nul distance og tid');
+  check('agent: manglende distance vises som -', missingLine, (v) => /(?:^|\s)km=-(?:\s|$)/.test(v));
+  check('agent: manglende tid vises som -', missingLine, (v) => /(?:^|\s)t=-(?:\s|$)/.test(v));
+  check('agent: manglende distance og tid bliver ikke 0', missingLine, (v) =>
+    !/(?:^|\s)km=0\.00(?:\s|$)/.test(v) && !/(?:^|\s)t=0(?:\s|$)/.test(v),
+  );
+  check('agent: rigtig nul distance vises som 0.00', zeroLine, (v) => /(?:^|\s)km=0\.00(?:\s|$)/.test(v));
+  check('agent: rigtig nul tid vises som 0', zeroLine, (v) => /(?:^|\s)t=0(?:\s|$)/.test(v));
+
+  const missingOnlyOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 1,
+    runsTotal: 1,
+    runs: [missingRun],
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: STATS uden kendt distance og tid viser -', missingOnlyOut, (v) =>
+    v.includes('km_total=-') &&
+    v.includes('median_km=-') &&
+    v.includes('moving_time_total=- s') &&
+    !v.includes('longest_run='),
+  );
+  check('agent: WINDOW og WEEKS uden kendt distance og tid viser -', missingOnlyOut, (v) =>
+    /recent: n=1 km=- t=- /.test(v) && /w=2026-W42 r=1 km=- t=- /.test(v),
+  );
+
+  // Blandet population: kun ét løb har både distance og tid. Pace skal komme
+  // fra det løb alene — ikke fra alle løbs tid delt med delsummen af km.
+  const pacedRun = mkRun('2026-10-15T10:00:00Z', 'Med distance og tid', 10, 3000, 140, 160, 70, 20);
+  const timeOnlyRun = mkRun('2026-10-16T10:00:00Z', 'Kun tid', 5, 1800, 140, 160, 70, 20);
+  timeOnlyRun.row.distanceM = null;
+  const mixedOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 2,
+    runsTotal: 2,
+    runs: [pacedRun, timeOnlyRun],
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: WINDOW-pace bruger kun løb med distance og tid', mixedOut, (v) =>
+    /recent: n=2 km=10\.0 t=4800 pace=300\.0 /.test(v),
+  );
+  check('agent: WEEKS summerer kendte værdier i blandet population', mixedOut, (v) =>
+    /w=2026-W42 r=2 km=10\.0 t=4800 /.test(v),
+  );
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });
