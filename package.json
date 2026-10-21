@@ -1,6 +1,6 @@
 {
   "name": "strava-digest",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Turns a Strava bulk export into one compact training digest an agent can read: splits, HR drift, pace consistency, zones, training load, trends.",
   "scripts": {
     "test": "node scripts/smoke-test.mjs",

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
-import { mapColumns, parseDate } from '../src/columns.ts';
+import { mapColumns, num, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
 import { renderMarkdown, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
@@ -828,6 +828,31 @@ try {
   check('tyske kolonnenavne giver alle felter', germanMap.unmatched, (v) => v.length === 0);
   check('tysk distance-felt parses', germanMap.index.has('distance'), (v) => v === true);
   check('tysk gennemsnitlig puls parses', germanMap.index.has('avgHr'), (v) => v === true);
+
+  // Talformatet er en regel pr. værdi, ikke pr. konto-locale. Komma og
+  // punktum kan hver være både decimal- og tusindtalsseparator, så reglen i
+  // num() skal dækkes direkte: gentagne separatorer og 3-cifrede grupper er
+  // tusindtal, og når begge tegn findes, er det sidste decimalseparator.
+  // "1.234" læses derfor som 1234 (tysk tusindtal), ikke som 1.234.
+  const germanElevation = germanMap.index.get('elevationGain')?.[0];
+  const numberRow = Array(germanHeaders.headers.length).fill('');
+  for (const [input, expected] of [
+    ['1.234', 1234],
+    ['2.345.678', 2_345_678],
+    ['1.234,5', 1234.5],
+    ['1,234.5', 1234.5],
+    ['12,5', 12.5],
+    ['10.5', 10.5],
+    ['1,234', 1234],
+    ['1,234,567', 1_234_567],
+    ['0.123', 0.123],
+    ['0,123', 0.123],
+    ['-12,5', -12.5],
+    ['.', null],
+  ]) {
+    numberRow[germanElevation] = input;
+    check(`talformat ${input}`, num(numberRow, germanMap, 'elevationGain'), (v) => v === expected);
+  }
 
   // 3) Stravas FIT-filer har hvert felt i sin egen beseg: distance, puls
   //    og højde står i hver deres post med samme tidspunkt. Uden
