@@ -64,7 +64,12 @@ E.g. "how was my week?" or "what was my longest run?"
 ```
 
 An existing skill is updated where it lives, so you never end up with two of
-the same name. Your own version is backed up to `SKILL.md.bak` first. Point at
+the same name. If the file you have differs from the packaged skill, it is
+copied to `SKILL.md.bak` first — and to `SKILL.md.bak.2`, `SKILL.md.bak.3`, …
+if a backup of that name already exists. A backup is never overwritten, and
+the file that is about to be replaced is never thrown away. A file that only
+differs in the `version:` line or in line endings is recognised as an older
+copy of the same skill, so a plain upgrade leaves no backup behind. Point at
 one folder to override: `strava-digest --install-skill ~/.hermes/skills`.
 
 **3. Let the repo be read.** `AGENTS.md` tells any agent working in the folder
@@ -263,7 +268,7 @@ MIT — see [LICENSE](LICENSE).
 
 There are two, and they mean different things.
 
-**The package version** (`1.0.1`) is the tool: the commands, the flags, the
+**The package version** (`1.0.2`) is the tool: the commands, the flags, the
 exit codes. It follows semver, so 1.x will not break your command line.
 
 **The agent format version** (`STRAVA DIGEST v2`, in the first line of the

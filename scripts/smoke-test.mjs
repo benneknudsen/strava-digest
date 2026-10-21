@@ -392,6 +392,81 @@ try {
   check('tilpasset version sikkerhedskopieres', existsSync(join(skillRoot2, 'kategori', 'strava-digest', 'SKILL.md.bak')), (v) => v === true);
   check('ingen duplikat-skill dannes', existsSync(join(skillRoot2, 'strava-digest')), (v) => v === false);
 
+  // Regression: installeringen må aldrig spise brugerens fil, og
+  // beskeden må aldrig påstå noget, koden ikke kan vide. Efter første
+  // kørsel er SKILL.md værktøjets egen output, så den anden kørsel må
+  // ikke kopiere den over .bak — brugerens egen version er brugerens
+  // redningsplanke. Køres med en midlertidig HOME, så den rigtige
+  // ~/.hermes ikke røres.
+  //
+  // HOME på Unix, USERPROFILE på Windows: os.homedir() læser den ene
+  // eller den anden, alt efter platformen.
+  function fakeHome(name, content) {
+    const home = join(tmp, name);
+    const dir = join(home, '.hermes', 'skills', 'strava-digest');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), content);
+    return { dir, file: join(dir, 'SKILL.md'), env: { ...process.env, HOME: home, USERPROFILE: home } };
+  }
+  const runInstall = (env) =>
+    execFileSync('node', [cliPath, '--install-skill'], { encoding: 'utf8', env });
+
+  const userSkill = '# Min egen skill\n\nmax-puls: 189 (min egen)\n';
+  const user = fakeHome('home', userSkill);
+  const bakFile = `${user.file}.bak`;
+  const firstOut = runInstall(user.env);
+  check('første installation sikkerhedskopierer brugerens version', readFileSync(bakFile, 'utf8'), (v) => v === userSkill);
+  check('første installation fortæller hvilken fil der blev skrevet', firstOut, (v) =>
+    v.includes('the previous SKILL.md was copied to SKILL.md.bak'),
+  );
+  check('første installation påstår ikke at kende ejerskabet', firstOut, (v) =>
+    !v.includes('your own version') && !v.includes('your earlier version'),
+  );
+  const secondOut = runInstall(user.env);
+  check('anden installation overskriver ikke .bak', readFileSync(bakFile, 'utf8'), (v) => v === userSkill);
+  check('anden installation påstår ikke at have gemt en brugerbackup', secondOut, (v) =>
+    !v.includes('your own version') && !v.includes('the previous SKILL.md was copied'),
+  );
+
+  // Opgraderingsstien: den installerede fil er værktøjets eget output fra
+  // en ældre pakkeversion. Den afviger kun i version-linjen, som følger
+  // pakkeversionen, så den skal genkendes som værktøjets eget output —
+  // ingen støjende .bak og ingen påstand om en brugerversion.
+  const packagedSkill = readFileSync(join(repoRoot, 'skills', 'strava-digest', 'SKILL.md'), 'utf8');
+  const upgrade = fakeHome('home-upgrade', packagedSkill.replace(/^version:.*$/m, 'version: 0.9.0'));
+  const upgradeOut = runInstall(upgrade.env);
+  check('opgradering: ingen backup fra en ren opgradering', existsSync(`${upgrade.file}.bak`), (v) => v === false);
+  check('opgradering: beskeden påstår ingen brugerversion', upgradeOut, (v) =>
+    !v.includes('your own version') && !v.includes('the previous SKILL.md was copied'),
+  );
+  check('opgradering: beskeden siger at skillen blev opdateret', upgradeOut, (v) =>
+    v.includes('the skill was updated'),
+  );
+  check('opgradering: den nye version er skrevet', readFileSync(upgrade.file, 'utf8'), (v) => v === packagedSkill);
+
+  // Samme sag med CRLF: Git på Windows konverterer LF -> CRLF ved
+  // checkout, så en fil der kun afviger i linjeskift, er ikke en
+  // redigering og må ikke give en støjende .bak.
+  const crlf = fakeHome('home-crlf', packagedSkill.replace(/\n/g, '\r\n'));
+  runInstall(crlf.env);
+  check('CRLF: ingen backup for en fil der kun afviger i linjeskift', existsSync(`${crlf.file}.bak`), (v) => v === false);
+
+  // Brugeren redigerer filen, mens en backup allerede findes. Den gamle
+  // backup må ikke røres, og brugerens fil må ikke gå tabt: den lander
+  // i det næste ledige navn, og beskeden fortæller hvilket.
+  const both = fakeHome('home-both', userSkill);
+  const bothBak2 = join(both.dir, 'SKILL.md.bak.2');
+  writeFileSync(join(both.dir, 'SKILL.md.bak'), 'earlier backup\n');
+  const bothOut = runInstall(both.env);
+  check('eksisterende backup røres ikke', readFileSync(join(both.dir, 'SKILL.md.bak'), 'utf8'), (v) => v === 'earlier backup\n');
+  check('brugerens fil overlever i .bak.2', existsSync(bothBak2) ? readFileSync(bothBak2, 'utf8') : null, (v) => v === userSkill);
+  check('beskeden nævner den fil der faktisk blev skrevet', bothOut, (v) =>
+    v.includes('the previous SKILL.md was copied to SKILL.md.bak.2'),
+  );
+  check('beskeden påstår ikke at kende ejerskabet', bothOut, (v) =>
+    !v.includes('your own version') && !v.includes('your earlier version'),
+  );
+
   let hrErr = null;
   try {
     execFileSync('node', ['src/cli.ts', tmp, '--max-hr', '0'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
