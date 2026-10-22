@@ -10,12 +10,12 @@ import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
 import { mapColumns, num, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
-import { renderMarkdown, fmtPace } from '../src/digest.ts';
+import { renderMarkdown, fmtDuration, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
 import { discoverSources } from '../src/interactive.ts';
 import { isActivityFile, rowFromTrack } from '../src/loose.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
-import { normalizeType, RUN_TYPES, toActivities } from '../src/strava.ts';
+import { normalizeType, parseActivities, RUN_TYPES } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'strava-digest-test-'));
@@ -73,6 +73,7 @@ function mkRun(iso, name, km, movingSec, avgHr, maxHr, relativeEffort, elevGainM
 }
 let failures = 0;
 let enkeltRoot = null;
+const scratchDirs = [];
 
 function check(label, actual, predicate) {
   const ok = predicate(actual);
@@ -120,7 +121,7 @@ try {
   const map = mapColumns(table);
   check('alle kolonner mappet', map.unmatched.length, (v) => v === 0);
 
-  const activities = toActivities(table, map);
+  const activities = parseActivities(table, map).activities;
   check('antal aktiviteter', activities.length, (v) => v === 4);
   check('antal løb', activities.filter((a) => a.isRun).length, (v) => v === 3);
   check('nyeste først', activities[0].name, (v) => v === 'Lang tur');
@@ -231,12 +232,14 @@ try {
   check('CLI skriver agent-digest', cli.includes('# STRAVA DIGEST v2 (agent-format)'), (v) => v === true);
   check('CLI har SCHEMA-sektion', cli.includes('## SCHEMA'), (v) => v === true);
   check('CLI viser HR-drift som felt', /drift=-?\d/.test(cli), (v) => v === true);
-  check('CLI uden max-puls: zonefelt er tomt', cli.includes('z=-'), (v) => v === true);
+  check('CLI uden max-puls: zonefelt er tomt', cli, (v) => /(?:^|\s)z=-(?:\s|$)/m.test(v));
   check('CLI-agent har én linje pr. løb', (cli.match(/^d=\d{4}-/gm) ?? []).length, (v) => v === 2);
-  check('CLI --last 2: WINDOW tæller alle 3 løb', cli, (v) => /recent: n=3 /.test(v));
-  check('CLI --last 2: STATS tæller alle 3 løb', cli, (v) => v.includes('runs=3 km_total='));
+  check('CLI --last 2: WINDOW tæller alle 3 løb', cli, (v) => /^recent: n=3 /m.test(v));
+  check('CLI --last 2: STATS tæller alle 3 løb', cli, (v) =>
+    /^runs=3 km_total=24\.0 median_km=8\.00 without_analysis=0$/m.test(v),
+  );
   check('CLI --last 2: NOTES siger talt mod vist', cli, (v) =>
-    v.includes('3 runs are counted in WEEKS, WINDOW and STATS; 2 runs are shown (--last).'),
+    /^- 3 runs are counted in WEEKS, WINDOW and STATS; 2 runs are shown \(--last\)\.$/m.test(v),
   );
 
   // Markdown-formatet er stadig tilgængeligt med --format md
@@ -254,7 +257,7 @@ try {
 
   const cliZones = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240'], { encoding: 'utf8' });
   check('CLI-agent viser zonefordeling', /z=\d/.test(cliZones), (v) => v === true);
-  check('CLI-agent markerer zonekilden', cliZones.includes('max_hr=240 source=flag'), (v) => v === true);
+  check('CLI-agent markerer zonekilden', cliZones, (v) => /^max_hr=240 source=flag$/m.test(v));
 
   // Uden --max-hr bruger værktøjet den højeste puls i eksporten som
   // zone-grundlag. Før stod headeren "max_hr=199 source=export-observation"
@@ -277,6 +280,330 @@ try {
   // den fejltolkning, der gør træningen se lettere ud end den er.
   check('SIGNALS forklarer at max kan vaere et gaet', cliNoHr, (v) =>
     v.includes('export-observation') && v.includes('not the user') && v.includes('spike'),
+  );
+
+  /* ---- regression (issue #14): rækker uden filnavn eller dato ---- */
+
+  // En aktivitet uden fil har stadig distance og tid i CSV'en. Den skal ikke
+  // forsvinde lydløst. En række med en dato, parseDate ikke kan læse, kan
+  // ikke placeres i digesten og skal tælles.
+  const scratch = (name) => {
+    const dir = mkdtempSync(join(tmpdir(), `strava-digest-${name}-`));
+    scratchDirs.push(dir);
+    return dir;
+  };
+  const csvHeader =
+    'Activity ID,Activity Date,Activity Name,Activity Type,Elapsed Time,Moving Time,Distance,Max Heart Rate,Average Heart Rate,Filename';
+  const writeExport = (name, rows) => {
+    const dir = scratch(name);
+    writeFileSync(join(dir, 'activities.csv'), [csvHeader, ...rows].join('\n') + '\n');
+    return dir;
+  };
+  const copyGoodGpx = (dir) =>
+    copyFileSync(join(tmp, 'activities', 'Run-1001.gpx'), join(dir, 'Good.gpx'));
+
+  const gapsDir = writeExport('gaps', [
+    '1,"Oct 12, 2026, 6:32:10 AM",Manual,Løb,1800,1800,5.0,170,150,',
+    '2,not-a-date,Bad date,Løb,1800,1800,5.0,170,150,Bad.gpx',
+    '3,not-a-date,Both missing,Løb,1800,1800,5.0,170,150,',
+    '4,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+  ]);
+  copyGoodGpx(gapsDir);
+
+  const gapsTable = parseCsv(readFileSync(join(gapsDir, 'activities.csv'), 'utf8'));
+  const gapsMap = mapColumns(gapsTable);
+  const gapsParsed = parseActivities(gapsTable, gapsMap);
+  const gapsRows = gapsParsed.activities;
+  check('dropped rows: row without filename is kept', gapsRows.length, (v) => v === 2);
+  check('dropped rows: row without filename has empty filename', gapsRows.find((r) => r.name === 'Manual')?.filename ?? null, (v) => v === '');
+  check('dropped rows: row with unparsable date is dropped', gapsRows.some((r) => r.name === 'Bad date'), (v) => v === false);
+  check('dropped rows: stats counts every CSV row', gapsParsed.stats.rowsInExport, (v) => v === 4);
+  check('dropped rows: stats counts skipped rows', gapsParsed.stats.skippedNoDate, (v) => v === 2);
+  check('dropped rows: stats counts skipped rows without a file', gapsParsed.stats.skippedNoDateNoFilename, (v) => v === 1);
+
+  const gapsAgent = execFileSync('node', ['src/cli.ts', gapsDir], { encoding: 'utf8' });
+  check('dropped rows: skipped note names a missing or unparsable date', gapsAgent, (v) =>
+    /^- 2 rows were skipped because of a missing or unparsable date and are not in the digest \(1 of them was also without a file name\)\.$/m.test(v),
+  );
+  check('dropped rows: included note is independent of the skipped note', gapsAgent, (v) =>
+    /^- 1 row has no file name, so it has no track analysis; its distance and time come from the CSV\.$/m.test(v),
+  );
+  check('dropped rows: activities_in_export counts every CSV row', gapsAgent, (v) => /^activities_in_export=4$/m.test(v));
+  check('dropped rows: runs_in_export counts the manual run', gapsAgent, (v) => /^runs_in_export=2$/m.test(v));
+  const manualLine = gapsAgent.split('\n').find((line) => line.startsWith('d=') && line.includes('n="Manual"')) ?? '';
+  check('dropped rows: manual run keeps CSV values and leaves track fields missing', manualLine, (v) =>
+    /^d=\S+ n="Manual" km=5\.00 t=1800 pace=360\.0 hr=150\/170 z=- elev=- drift=- half=- cv=- pause=- load=- err="no activity file in the export"$/m.test(v),
+  );
+  check('dropped rows: manual run is counted in STATS and marked unanalysed', gapsAgent, (v) =>
+    /^runs=2 km_total=10\.0 median_km=5\.00 without_analysis=1$/m.test(v),
+  );
+  check('dropped rows: WINDOW marks the run without analysis', gapsAgent, (v) =>
+    /^recent: .* without_analysis=1$/m.test(v),
+  );
+  check('dropped rows: clean export has no coverage notes', cliNoHr, (v) =>
+    !v.includes('skipped because of a missing or unparsable date') &&
+    !v.includes('included from the CSV without track analysis'),
+  );
+
+  // s4-lignende: en ikke-løb uden fil og en undateret række. Uden --all er
+  // ikke-løbet ikke i digesten, så kun drop-noten må skrives. Med --all er
+  // begge noter sande og skal skrives hver for sig.
+  const nonRunDir = writeExport('nonrun', [
+    '1,"Oct 12, 2026, 6:32:10 AM",Gym,Weight Training,1800,1800,0,120,110,',
+    '2,not-a-date,Bad date,Løb,1800,1800,5.0,170,150,Bad.gpx',
+    '3,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+  ]);
+  copyGoodGpx(nonRunDir);
+
+  const nonRunAgent = execFileSync('node', ['src/cli.ts', nonRunDir], { encoding: 'utf8' });
+  check('s4 without --all: skipped note only', nonRunAgent, (v) =>
+    /^- 1 row was skipped because of a missing or unparsable date and is not in the digest\.$/m.test(v),
+  );
+  check('s4 without --all: no included note for a filtered-out non-run', nonRunAgent, (v) =>
+    !v.includes('included from the CSV without track analysis'),
+  );
+  check('s4 without --all: non-run without file is not in RUNS', nonRunAgent, (v) =>
+    !v.includes('n="Gym"'),
+  );
+  check('s4 without --all: runs_in_export excludes the non-run', nonRunAgent, (v) =>
+    /^runs_in_export=1$/m.test(v),
+  );
+
+  const nonRunAll = execFileSync('node', ['src/cli.ts', nonRunDir, '--all'], { encoding: 'utf8' });
+  check('s4 with --all: skipped note', nonRunAll, (v) =>
+    /^- 1 row was skipped because of a missing or unparsable date and is not in the digest\.$/m.test(v),
+  );
+  check('s4 with --all: included note is separate', nonRunAll, (v) =>
+    /^- 1 row has no file name, so it has no track analysis; its distance and time come from the CSV\.$/m.test(v),
+  );
+  check('s4 with --all: no-file non-run line is exact', nonRunAll, (v) =>
+    /^d=\S+ n="Gym" km=0\.00 t=1800 pace=- hr=110\/120 z=- elev=- drift=- half=- cv=- pause=- load=- err="no activity file in the export"$/m.test(v),
+  );
+  check('s4 with --all: runs_in_export counts the non-run', nonRunAll, (v) =>
+    /^runs_in_export=2$/m.test(v),
+  );
+
+  // s2-lignende: no-file-ikke-løb + løb med fil, ingen undaterede rækker.
+  // Uden --all er der intet at rapportere. Med --all skal included-noten
+  // skrives uden en drop-note ved siden af.
+  const s2Dir = writeExport('s2', [
+    '1,"Oct 12, 2026, 6:32:10 AM",Gym,Weight Training,1800,1800,0,120,110,',
+    '2,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+  ]);
+  copyGoodGpx(s2Dir);
+
+  const s2Agent = execFileSync('node', ['src/cli.ts', s2Dir], { encoding: 'utf8' });
+  check('s2 without --all: no coverage notes', s2Agent, (v) =>
+    !v.includes('skipped because of a missing or unparsable date') &&
+    !v.includes('included from the CSV without track analysis'),
+  );
+  check('s2 without --all: non-run without file is not in RUNS', s2Agent, (v) =>
+    !v.includes('n="Gym"'),
+  );
+
+  const s2All = execFileSync('node', ['src/cli.ts', s2Dir, '--all'], { encoding: 'utf8' });
+  check('s2 with --all: included note without a drop note', s2All, (v) =>
+    /^- 1 row has no file name, so it has no track analysis; its distance and time come from the CSV\.$/m.test(v),
+  );
+  // Anchor guard: the note must be the full sentence, not just the prefix.
+  // Removing the trailing `$` from this assertion makes it match the full
+  // line above, so the M3 mutation ("remove the `$` anchors") fails here.
+  check('s2 with --all: included note is not a bare prefix', s2All, (v) =>
+    !/^- 1 row has no file name, so it has no track analysis$/m.test(v),
+  );
+  check('s2 with --all: no skipped note', s2All, (v) =>
+    !v.includes('skipped because of a missing or unparsable date'),
+  );
+  check('s2 with --all: runs_in_export counts the non-run', s2All, (v) =>
+    /^runs_in_export=2$/m.test(v),
+  );
+
+  // s5-lignende: kun rækker uden fil. Included-noten skal skrives både med
+  // og uden --all, og der er ingen drop-note at hænge den på.
+  const s5Dir = writeExport('s5', [
+    '1,"Oct 12, 2026, 6:32:10 AM",No file A,Løb,1800,1800,5.0,170,150,',
+    '2,"Oct 11, 2026, 6:32:10 AM",No file B,Løb,1800,1800,5.0,170,150,',
+  ]);
+
+  const s5Agent = execFileSync('node', ['src/cli.ts', s5Dir], { encoding: 'utf8' });
+  const s5All = execFileSync('node', ['src/cli.ts', s5Dir, '--all'], { encoding: 'utf8' });
+  for (const [label, output] of [['without --all', s5Agent], ['with --all', s5All]]) {
+    check(`s5 ${label}: included note without a drop note`, output, (v) =>
+      /^- 2 rows have no file name, so they have no track analysis; their distance and time come from the CSV\.$/m.test(v),
+    );
+    check(`s5 ${label}: no skipped note`, output, (v) =>
+      !v.includes('skipped because of a missing or unparsable date'),
+    );
+  }
+
+  // Ingen undaterede rækker, men et løb uden fil: drop-noten skal udelades,
+  // included-noten skal stadig skrives.
+  const noDropDir = writeExport('nodrop', [
+    '1,"Oct 12, 2026, 6:32:10 AM",No file,Løb,1800,1800,5.0,170,150,',
+    '2,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+  ]);
+  copyGoodGpx(noDropDir);
+
+  const noDropAgent = execFileSync('node', ['src/cli.ts', noDropDir], { encoding: 'utf8' });
+  check('no drops: no skipped note', noDropAgent, (v) =>
+    !v.includes('skipped because of a missing or unparsable date'),
+  );
+  check('no drops: included note is still written', noDropAgent, (v) =>
+    /^- 1 row has no file name, so it has no track analysis; its distance and time come from the CSV\.$/m.test(v),
+  );
+  check('no drops: no-file run keeps CSV values in the digest', noDropAgent, (v) =>
+    /^d=\S+ n="No file" km=5\.00 t=1800 pace=360\.0 hr=150\/170 z=- elev=- drift=- half=- cv=- pause=- load=- err="no activity file in the export"$/m.test(v),
+  );
+
+  // Krav 1: Markdown-baseline skal regne pace på samme rækker som agent-
+  // formatet: distance > 0 og en tid. En række uden distance må stadig
+  // tælle i km/t-totalerne, men ikke i pace-brøken.
+  const paceDir = writeExport('pace', [
+    '1,"Oct 12, 2026, 6:32:10 AM",No distance,Løb,1800,1800,0,170,150,',
+    '2,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+  ]);
+  copyGoodGpx(paceDir);
+
+  const paceAgent = execFileSync('node', ['src/cli.ts', paceDir], { encoding: 'utf8' });
+  check('agent WINDOW: time still counts rows without distance', paceAgent, (v) =>
+    /^recent: n=2 km=5\.0 t=3600 pace=360\.0 hr=150 .* without_analysis=1$/m.test(v),
+  );
+  const paceMd = execFileSync('node', ['src/cli.ts', paceDir, '--format', 'md'], { encoding: 'utf8' });
+  check('windowStats: Markdown baseline pace ignores rows without distance', paceMd, (v) =>
+    /^- average: 6:00\/km · heart rate 150$/m.test(v),
+  );
+  const paceJson = JSON.parse(
+    execFileSync('node', ['src/cli.ts', paceDir, '--json'], { encoding: 'utf8' }),
+  );
+  check('windowStats: JSON markdown baseline pace ignores rows without distance', paceJson.markdown, (v) =>
+    /^- average: 6:00\/km · heart rate 150$/m.test(v),
+  );
+  check('Markdown-baseline viser hvor mange løb zonerne dækker', paceMd, (v) =>
+    /^- zones: .*\(from 1 of 2 runs\)$/m.test(v),
+  );
+
+  // Noten om rækker uden filnavn beskriver rækkerne, ikke hvor i outputtet
+  // de står. Derfor skal den være identisk i alle formater og sand under
+  // --last, også når rækken ligger uden for de viste løb.
+  const outsideLastDir = writeExport('outside-last', [
+    '1,"Oct 12, 2026, 6:32:10 AM",Newest,Løb,1800,1800,5.0,170,150,Good.gpx',
+    '2,"Oct 11, 2026, 6:32:10 AM",Second,Løb,1800,1800,5.0,170,150,Good.gpx',
+    '3,"Oct 10, 2026, 6:32:10 AM",Older no file,Løb,1800,1800,5.0,170,150,',
+  ]);
+  copyGoodGpx(outsideLastDir);
+  const outsideNote =
+    '1 row has no file name, so it has no track analysis; its distance and time come from the CSV.';
+  const outsideAgent = execFileSync('node', ['src/cli.ts', outsideLastDir, '--last', '2'], {
+    encoding: 'utf8',
+  });
+  const outsideMd = execFileSync(
+    'node',
+    ['src/cli.ts', outsideLastDir, '--last', '2', '--format', 'md'],
+    { encoding: 'utf8' },
+  );
+  const outsideJson = JSON.parse(
+    execFileSync('node', ['src/cli.ts', outsideLastDir, '--last', '2', '--json'], {
+      encoding: 'utf8',
+    }),
+  );
+  check('--last: agent-noten beskriver no-file-rækken', outsideAgent, (v) =>
+    v.includes(`- ${outsideNote}`),
+  );
+  check('--last: Markdown-noten er identisk og sand', outsideMd, (v) =>
+    v.includes(`- ${outsideNote}`),
+  );
+  check('--last: JSON notes er identisk', outsideJson.notes, (v) => v.includes(outsideNote));
+  check('--last: JSON hostNote er identisk', outsideJson.hostNote, (v) => v.includes(outsideNote));
+  check('--last: JSON markdown er identisk', outsideJson.markdown, (v) =>
+    v.includes(`- ${outsideNote}`),
+  );
+  check('--last: no-file-rækken er ikke blandt de viste løb', outsideAgent, (v) =>
+    !v.includes('n="Older no file"'),
+  );
+
+  // Krav 2: den observerede max-puls er den højeste i hele eksporten. Rækker
+  // uden fil tæller med, og det gør undaterede rækker også.
+  const maxHrDir = writeExport('maxhr', [
+    '1,"Oct 12, 2026, 6:32:10 AM",No file,Løb,1800,1800,5.0,190,150,',
+    '2,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,174,150,Good.gpx',
+  ]);
+  copyGoodGpx(maxHrDir);
+
+  const maxHrAgent = execFileSync('node', ['src/cli.ts', maxHrDir], { encoding: 'utf8' });
+  check('max HR: observed max includes no-file rows', maxHrAgent, (v) =>
+    /^max_hr=190 source=export-observation$/m.test(v),
+  );
+
+  const undatedMaxHrDir = writeExport('maxhr-undated', [
+    '1,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,174,150,Good.gpx',
+    '2,not-a-date,Undated,Løb,1800,1800,5.0,200,150,Bad.gpx',
+  ]);
+  copyGoodGpx(undatedMaxHrDir);
+  const undatedMaxHrTable = parseCsv(readFileSync(join(undatedMaxHrDir, 'activities.csv'), 'utf8'));
+  const undatedMaxHrStats = parseActivities(undatedMaxHrTable, mapColumns(undatedMaxHrTable)).stats;
+  check('max HR: skipped rows expose their max HR', undatedMaxHrStats.maxHrOfSkipped, (v) => v === 200);
+
+  const undatedMaxHrAgent = execFileSync('node', ['src/cli.ts', undatedMaxHrDir], { encoding: 'utf8' });
+  check('max HR: observed max includes undated rows', undatedMaxHrAgent, (v) =>
+    /^max_hr=200 source=export-observation$/m.test(v),
+  );
+
+  // Et rigtigt nul i Max Heart Rate er ikke en observation. Uden denne guard
+  // ville maxHrOfSkipped blive 0, og forskellen mellem "ingen puls" og "puls
+  // 0" ville forsvinde i statistikken.
+  const zeroMaxHrDir = writeExport('maxhr-zero', [
+    '1,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,174,150,Good.gpx',
+    '2,not-a-date,Zero HR,Løb,1800,1800,5.0,0,150,Bad.gpx',
+  ]);
+  copyGoodGpx(zeroMaxHrDir);
+  const zeroMaxHrTable = parseCsv(readFileSync(join(zeroMaxHrDir, 'activities.csv'), 'utf8'));
+  const zeroMaxHrStats = parseActivities(zeroMaxHrTable, mapColumns(zeroMaxHrTable)).stats;
+  check('max HR: undated row with maxHr 0 gives null, not 0', zeroMaxHrStats.maxHrOfSkipped, (v) => v === null);
+  const zeroMaxHrAgent = execFileSync('node', ['src/cli.ts', zeroMaxHrDir], { encoding: 'utf8' });
+  check('max HR: a zero maxHr on a skipped row cannot become the observed max', zeroMaxHrAgent, (v) =>
+    /^max_hr=174 source=export-observation$/m.test(v),
+  );
+  check('max HR: note says the highest Max Heart Rate value in the CSV', undatedMaxHrAgent, (v) =>
+    /^- max_hr=200 is the highest Max Heart Rate value in the activities CSV \(observed\), not your watch's own max HR; heart-rate samples in the track files are not scanned\. Strava's bulk export does not contain the watch's zone configuration, so the zone boundaries are a best guess\.$/m.test(v),
+  );
+
+  const gapsList = execFileSync('node', ['src/cli.ts', gapsDir, '--list'], { encoding: 'utf8' });
+  check('dropped rows: --list total is the CSV row count', gapsList, (v) =>
+    /^4 activities in total \(shown: 2\)$/m.test(v),
+  );
+  check('dropped rows: --list shows the manual activity without a file', gapsList, (v) =>
+    /\(no file\)/.test(v),
+  );
+  check('dropped rows: --list names the skipped rows', gapsList, (v) =>
+    /^Skipped: 2 rows with a missing or unparsable date\.$/m.test(v),
+  );
+
+  const gapsMd = execFileSync('node', ['src/cli.ts', gapsDir, '--format', 'md'], { encoding: 'utf8' });
+  check('dropped rows: Markdown total is the CSV row count', gapsMd, (v) =>
+    /^Source: .*· 4 activities in export · 2 runs in digest$/m.test(v),
+  );
+  check('dropped rows: Markdown shows both notes', gapsMd, (v) =>
+    /^- 2 rows were skipped because of a missing or unparsable date and are not in the digest \(1 of them was also without a file name\)\. 1 row has no file name, so it has no track analysis; its distance and time come from the CSV\.$/m.test(v),
+  );
+  check('dropped rows: Markdown marks the manual run as unanalysed', gapsMd, (v) =>
+    /^- _per-run details unavailable: no activity file in the export_$/m.test(v),
+  );
+
+  // Relative Effort og udstyr kommer fra CSV'en, ikke fra sporet. De skal
+  // derfor vises på en no-file-række, hvor analysen mangler.
+  const metadataDir = scratch('metadata');
+  writeFileSync(
+    join(metadataDir, 'activities.csv'),
+    [
+      'Activity ID,Activity Date,Activity Name,Activity Type,Elapsed Time,Moving Time,Distance,Max Heart Rate,Average Heart Rate,Relative Effort,Activity Gear,Filename',
+      '1,"Oct 12, 2026, 6:32:10 AM",Manual,Løb,1800,1800,5.0,170,150,42,Nike Pegasus,',
+    ].join('\n') + '\n',
+  );
+  const metadataMd = execFileSync('node', ['src/cli.ts', metadataDir, '--format', 'md'], {
+    encoding: 'utf8',
+  });
+  check('Markdown viser RE og gear for no-file-rækker', metadataMd, (v) =>
+    /^- \*\*Metadata:\*\* RE 42 · Nike Pegasus$/m.test(v),
   );
 
   // Agent-formatet skal ikke dumpe Stravas kolonnenavne i modellens kontekst.
@@ -321,7 +648,9 @@ try {
   check('CLI-agent har STATS-sektion', cliZones.includes('## STATS'), (v) => v === true);
   check('CLI-agent har WEEKS-sektion', cliZones.includes('## WEEKS'), (v) => v === true);
   check('CLI-agent har splits for detaljerede løb', /sp=\d+:/.test(cliZones), (v) => v === true);
-  check('CLI-agent bruger punktum som decimaltegn', cliZones.includes('km=10.00'), (v) => v === true);
+  check('CLI-agent bruger punktum som decimaltegn', cliZones, (v) =>
+    /(?:^|\s)km=10\.00(?:\s|$)/m.test(v),
+  );
 
   // Output er engelsk, så ethvert agent-setup kan læse den. Regression-guard:
   // hvis en dansk strenge sniger sig ind i en overskrift eller en note, skal
@@ -530,15 +859,21 @@ try {
   check('loose mappe: tre løb i digesten', looseDirMd, (v) => v.includes('3 runs in digest'));
 
   const looseZones = execFileSync('node', ['src/cli.ts', looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });
-  check('loose: zoner med --max-hr', looseZones, (v) => /z=\d/.test(v) && v.includes('max_hr=240 source=flag'));
+  check('loose: zoner med --max-hr', looseZones, (v) =>
+    /z=\d/.test(v) && /^max_hr=240 source=flag$/m.test(v),
+  );
 
   // --last begrænser kun de løb der beskrives. WEEKS, WINDOW og STATS skal
   // stadig tælle hele mappen, også når kun de to nyeste vises.
   const looseLast = execFileSync('node', ['src/cli.ts', looseDir, '--last', '2'], { encoding: 'utf8' });
-  check('loose --last 2: WINDOW tæller alle 3 løb', looseLast, (v) => /recent: n=3 /.test(v));
-  check('loose --last 2: STATS tæller alle 3 løb', looseLast, (v) => v.includes('runs=3 km_total='));
+  check('loose --last 2: WINDOW tæller alle 3 løb', looseLast, (v) => /^recent: n=3 /m.test(v));
+  check('loose --last 2: STATS tæller alle 3 løb', looseLast, (v) =>
+    // Uden --max-hr har ingen af de løse filer zoner, så ingen har et
+    // load-bidrag: without_analysis tæller dem alle tre.
+    /^runs=3 km_total=24\.0 median_km=7\.99 without_analysis=3$/m.test(v),
+  );
   check('loose --last 2: NOTES siger talt mod vist', looseLast, (v) =>
-    v.includes('3 runs are counted in WEEKS, WINDOW and STATS; 2 runs are shown (--last).'),
+    /^- 3 runs are counted in WEEKS, WINDOW and STATS; 2 runs are shown \(--last\)\.$/m.test(v),
   );
 
   const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
@@ -897,7 +1232,7 @@ try {
     ].join('\n'),
   );
   const daMap = mapColumns(daCsv);
-  const daRows = toActivities(daCsv, daMap);
+  const daRows = parseActivities(daCsv, daMap).activities;
   check('dansk "Aktivitetsudstyr" giver sko, ikke cykel-id', daRows[0]?.gear, (v) => v === 'Nike Vomero Plus');
   check('dansk "Samlet stigning" mappes som stigning', daRows[0]?.elevationGain, (v) => v === 41);
   check('dansk "Løb" er et løb', daRows[0]?.isRun, (v) => v === true);
@@ -922,6 +1257,45 @@ try {
   check('pace 360 sek vises 6:00', fmtPace(360), (v) => v === '6:00/km');
   check('pace 61 sek vises 1:01', fmtPace(61), (v) => v === '1:01/km');
   check('pace 0 vises som –', fmtPace(0), (v) => v === '–');
+  check('varighed 0 vises som 0:00, ikke som manglende', fmtDuration(0), (v) => v === '0:00');
+  check('manglende varighed vises som –', fmtDuration(null), (v) => v === '–');
+
+  // Regression (issue #14): en track uden brugbar tid er "manglende", ikke
+  // et rigtigt nul. CSV'ens Moving Time er tom, og UdenTid.gpx har ingen
+  // punkter med tid, så Markdown må vise – og ikke 0:00.
+  const noTimeTrack = parseActivityBuffer(
+    'UdenTid.gpx',
+    readFileSync(join(tmp, 'activities/UdenTid.gpx')),
+  );
+  const noTimeAnalysis = analyseRun(noTimeTrack);
+  const degenRow = { ...activities[0], name: 'Degen', distanceM: 5000, movingSec: null };
+  const degenMd = renderMarkdown({
+    sourceLabel: 'test',
+    activitiesInExport: 1,
+    runs: [{ row: degenRow, analysis: noTimeAnalysis }],
+    baselineDays: 28,
+    unmatchedHeaders: [],
+    contextText: '',
+    generatedAt: new Date('2026-10-13T08:00:00'),
+    poolLabel: 'Løb',
+  });
+  check('Markdown: track uden brugbar tid vises som –, ikke 0:00', degenMd, (v) =>
+    v.includes('5.00 km · – · **–**') && !v.includes('5.00 km · 0:00'),
+  );
+  const zeroCsvRow = { ...degenRow, movingSec: 0 };
+  const zeroCsvMd = renderMarkdown({
+    sourceLabel: 'test',
+    activitiesInExport: 1,
+    runs: [{ row: zeroCsvRow, analysis: noTimeAnalysis }],
+    baselineDays: 28,
+    unmatchedHeaders: [],
+    contextText: '',
+    generatedAt: new Date('2026-10-13T08:00:00'),
+    poolLabel: 'Løb',
+  });
+  check('Markdown: CSV Moving Time 0 vises fortsat som 0:00', zeroCsvMd, (v) =>
+    v.includes('5.00 km · 0:00 · **–**'),
+  );
 
   /* ---- agent-formatet (Del E) ---- */
 
@@ -956,28 +1330,34 @@ try {
   check('agent: to uger tælles separat', /w=2026-W41 r=1/.test(agentOut), (v) => v === true);
   check('agent: har WINDOW', agentOut.includes('## WINDOW'), (v) => v === true);
   check('agent: har STATS', agentOut.includes('## STATS'), (v) => v === true);
-  check('agent: STATS har total km', agentOut.includes('km_total=29.0'), (v) => v === true);
-  check('agent: STATS har længste løb', agentOut.includes('longest_run=10.00'), (v) => v === true);
-  check('agent: STATS har største pause', agentOut.includes('max_gap='), (v) => v === true);
+  check('agent: STATS har total km', agentOut, (v) =>
+    /^runs=4 km_total=29\.0 median_km=8\.00 without_analysis=0$/m.test(v),
+  );
+  check('agent: STATS har længste løb', agentOut, (v) =>
+    /^longest_run=10\.00 km on 2026-10-16 \(Tæppe\)$/m.test(v),
+  );
+  check('agent: STATS har største pause', agentOut, (v) => /^max_gap=\d+(?:\.\d)? days/m.test(v));
   check('agent: kontekst er med', agentOut.includes('plan: 3 løb/uge'), (v) => v === true);
   check('agent: kun detaljerede løb får splits', (agentOut.match(/sp=\d+:/g) ?? []).length, (v) => v === 1);
-  check('agent: load vægter zoner', /load=\d+/.test(agentOut), (v) => v === true);
+  check('agent: load vægter zoner', /(?:^|\s)load=\d+(?:\s|$)/m.test(agentOut), (v) => v === true);
   check('agent: ingen dansk komma i decimal', !/km=\d+,\d/.test(agentOut), (v) => v === true);
-  check('agent: feltnavne er konsistente', agentOut.includes('pace=') && agentOut.includes('drift=') && agentOut.includes('half='), (v) => v === true);
+  check('agent: feltnavne er konsistente', agentOut, (v) =>
+    /^d=.*\space=.*\sdrift=.*\shalf=/m.test(v),
+  );
   check('agent: notes-sektion findes', agentOut.includes('## NOTES'), (v) => v === true);
 
   // Uden --last er de viste løb og populationen de samme, så WEEKS,
   // WINDOW og STATS skal give præcis de samme tal som før ændringen.
   check('agent: WEEKS uændret uden --last', agentOut, (v) =>
-    v.includes('w=2026-W42 r=3 km=23.0 t=9200 load=213 hr=148') &&
-    v.includes('w=2026-W41 r=1 km=6.0 t=2400 load=71 hr=145'),
+    /^w=2026-W42 r=3 km=23\.0 t=9200 load=213 hr=148 without_analysis=0$/m.test(v) &&
+    /^w=2026-W41 r=1 km=6\.0 t=2400 load=71 hr=145 without_analysis=0$/m.test(v),
   );
   check('agent: WINDOW uændret uden --last', agentOut, (v) =>
-    v.includes('recent: n=4 km=29.0 t=11600 pace=400.0 hr=148 load=284 z=3.2,64.5,32.3,0.0,0.0') &&
-    v.includes('previous: n=0 km=- t=- pace=- hr=- load=- z=-'),
+    /^recent: n=4 km=29\.0 t=11600 pace=400\.0 hr=148 load=284 z=3\.2,64\.5,32\.3,0\.0,0\.0 without_analysis=0$/m.test(v) &&
+    /^previous: n=0 km=- t=- pace=- hr=- load=- z=- without_analysis=0$/m.test(v),
   );
   check('agent: STATS uændret uden --last', agentOut, (v) =>
-    v.includes('runs=4 km_total=29.0 median_km=8.00'),
+    /^runs=4 km_total=29\.0 median_km=8\.00 without_analysis=0$/m.test(v),
   );
   check('agent: ingen talt/vist-note uden --last', agentOut, (v) =>
     !v.includes('shown (--last)'),
@@ -1031,13 +1411,12 @@ try {
     notes: [],
   });
   check('agent: STATS uden kendt distance og tid viser -', missingOnlyOut, (v) =>
-    v.includes('km_total=-') &&
-    v.includes('median_km=-') &&
-    v.includes('moving_time_total=- s') &&
-    !v.includes('longest_run='),
+    /^runs=1 km_total=- median_km=- without_analysis=0$/m.test(v) &&
+    /^moving_time_total=- s$/m.test(v) &&
+    !/^longest_run=/m.test(v),
   );
   check('agent: WINDOW og WEEKS uden kendt distance og tid viser -', missingOnlyOut, (v) =>
-    /recent: n=1 km=- t=- /.test(v) && /w=2026-W42 r=1 km=- t=- /.test(v),
+    /^recent: n=1 km=- t=- /m.test(v) && /^w=2026-W42 r=1 km=- t=- /m.test(v),
   );
 
   // Blandet population: kun ét løb har både distance og tid. Pace skal komme
@@ -1060,10 +1439,10 @@ try {
     notes: [],
   });
   check('agent: WINDOW-pace bruger kun løb med distance og tid', mixedOut, (v) =>
-    /recent: n=2 km=10\.0 t=4800 pace=300\.0 /.test(v),
+    /^recent: n=2 km=10\.0 t=4800 pace=300\.0 /m.test(v),
   );
   check('agent: WEEKS summerer kendte værdier i blandet population', mixedOut, (v) =>
-    /w=2026-W42 r=2 km=10\.0 t=4800 /.test(v),
+    /^w=2026-W42 r=2 km=10\.0 t=4800 /m.test(v),
   );
 
   // Regression (issue #13): --last begrænser hvilke løb der BESKRIVES,
@@ -1091,23 +1470,262 @@ try {
     notes: [],
   });
   check('agent --last: WEEKS tæller hele populationen', lastOut, (v) =>
-    /w=2026-W42 r=2 /.test(v) && /w=2026-W36 r=1 /.test(v),
+    /^w=2026-W42 r=2 km=18\.0 t=7200 load=142 hr=153 without_analysis=0$/m.test(v) &&
+    /^w=2026-W36 r=1 km=6\.0 t=2400 load=71 hr=145 without_analysis=0$/m.test(v),
   );
   check('agent --last: WINDOW recent tæller alle i vinduet', lastOut, (v) =>
-    /recent: n=2 km=18\.0 t=7200 pace=400\.0 hr=153 load=142 /.test(v),
+    /^recent: n=2 km=18\.0 t=7200 pace=400\.0 hr=153 load=142 z=3\.2,64\.5,32\.3,0\.0,0\.0 without_analysis=0$/m.test(v),
   );
   check('agent --last: WINDOW previous tæller løb uden for vinduet', lastOut, (v) =>
-    /previous: n=1 km=6\.0 t=2400 pace=400\.0 hr=145 load=71 /.test(v),
+    /^previous: n=1 km=6\.0 t=2400 pace=400\.0 hr=145 load=71 z=3\.2,64\.5,32\.3,0\.0,0\.0 without_analysis=0$/m.test(v),
   );
   check('agent --last: change beregnes på hele populationen', lastOut, (v) =>
-    v.includes('change: km=200.0 % load=100.0 %'),
+    /^change: km=200\.0 % load=n\/a$/m.test(v),
   );
   check('agent --last: STATS tæller hele populationen', lastOut, (v) =>
-    v.includes('runs=3 km_total=24.0 median_km=8.00'),
+    /^runs=3 km_total=24\.0 median_km=8\.00 without_analysis=0$/m.test(v),
   );
   check('agent --last: kun de viste løb får linjer', (lastOut.match(/^d=\d{4}-/gm) ?? []).length, (v) => v === 1);
   check('agent --last: NOTES siger talt mod vist', lastOut, (v) =>
-    v.includes('3 runs are counted in WEEKS, WINDOW and STATS; 1 run is shown (--last).'),
+    /^- 3 runs are counted in WEEKS, WINDOW and STATS; 1 run is shown \(--last\)\.$/m.test(v),
+  );
+
+  // Regression (issue #14): en uge med to løb, hvoraf det ene ikke har en
+  // fil, må ikke se ud som om load dækker begge. WEEKS skal bære samme
+  // without_analysis som WINDOW.
+  const unanalysedWeekRun = mkRun('2026-10-15T10:00:00Z', 'Uden fil', 5, 1800, 150, 170, 80, 20);
+  unanalysedWeekRun.analysis = null;
+  const weekPopulation = [
+    mkRun('2026-10-16T10:00:00Z', 'Analyseret', 5, 1800, 150, 170, 80, 20),
+    unanalysedWeekRun,
+  ];
+  const weekOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 2,
+    runsTotal: 2,
+    runs: weekPopulation,
+    allRuns: weekPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: WEEKS markerer løb uden analyse', weekOut, (v) =>
+    /^w=2026-W42 r=2 km=10\.0 t=3600 load=71 hr=150 without_analysis=1$/m.test(v),
+  );
+
+  // Når begge vinduer har lige mange analyserede løb, er load-tallene
+  // sammenlignelige, selv om without_analysis afviger. Det er det
+  // analyserede antal — ikke antallet af ulæste løb — der afgør gaten.
+  const unanalysedRecent = mkRun('2026-10-15T10:00:00Z', 'Uden fil', 5, 1800, 150, 170, 80, 20);
+  unanalysedRecent.analysis = null;
+  const changePopulation = [
+    mkRun('2026-10-16T10:00:00Z', 'Nyeste', 10, 4000, 155, 175, 88, 50),
+    unanalysedRecent,
+    mkRun('2026-09-01T10:00:00Z', 'Gammel', 6, 2400, 145, 165, 70, 20),
+  ];
+  const changeOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 3,
+    runsTotal: changePopulation.length,
+    runs: changePopulation,
+    allRuns: changePopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: change viser load når det analyserede antal er ens', changeOut, (v) =>
+    /^change: km=150\.0 % load=0\.0 %$/m.test(v),
+  );
+
+  // Regression (issue #14): to vinduer kan have samme antal ulæste løb og
+  // alligevel forskelligt antal ANALYSEREDE løb. Load må først sammenlignes
+  // når det analyserede antal er ens; ellers dækker de to load-tal hver sin
+  // population, og en load-ændring kan være et artefakt af det.
+  const mixedRecentUnanalysed = mkRun('2026-10-15T10:00:00Z', 'Uden fil', 5, 1800, 150, 170, 80, 20);
+  mixedRecentUnanalysed.analysis = null;
+  const mixedPreviousUnanalysed = mkRun('2026-09-02T10:00:00Z', 'Uden fil', 5, 1800, 150, 170, 80, 20);
+  mixedPreviousUnanalysed.analysis = null;
+  const mixedWindowPopulation = [
+    mkRun('2026-10-16T10:00:00Z', 'Analyseret', 5, 1800, 150, 170, 80, 20),
+    mixedRecentUnanalysed,
+    mkRun('2026-10-14T10:00:00Z', 'Analyseret', 5, 1800, 150, 170, 80, 20),
+    mkRun('2026-09-01T10:00:00Z', 'Gammel', 5, 1800, 150, 170, 80, 20),
+    mixedPreviousUnanalysed,
+  ];
+  const mixedWindowOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: mixedWindowPopulation.length,
+    runsTotal: mixedWindowPopulation.length,
+    runs: mixedWindowPopulation,
+    allRuns: mixedWindowPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: change skjuler load når kun det analyserede antal afviger', mixedWindowOut, (v) =>
+    /^recent: n=3 .* without_analysis=1$/m.test(v) &&
+    /^previous: n=2 .* without_analysis=1$/m.test(v) &&
+    /^change: km=50\.0 % load=n\/a$/m.test(v),
+  );
+
+  // Regression (issue #14, B1): et løb uden puls har en analyse, men
+  // `zones == null`, så det bidrager ikke til load. Gaten, WEEKS, WINDOW og
+  // STATS skal tælle det som without_analysis — ellers ser to vinduer lige
+  // store ud, selv om kun det ene load-tal dækker alle løb.
+  const noHrRecent = mkRun('2026-10-15T10:00:00Z', 'Uden puls', 5, 1800, 150, 170, 80, 20);
+  noHrRecent.analysis.zones = null;
+  noHrRecent.analysis.zonePct = null;
+  const noHrPopulation = [
+    mkRun('2026-10-16T10:00:00Z', 'Med puls', 5, 1800, 150, 170, 80, 20),
+    noHrRecent,
+    mkRun('2026-09-15T10:00:00Z', 'Med puls', 5, 1800, 150, 170, 80, 20),
+    mkRun('2026-09-14T10:00:00Z', 'Med puls', 5, 1800, 150, 170, 80, 20),
+  ];
+  const noHrOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: noHrPopulation.length,
+    runsTotal: noHrPopulation.length,
+    runs: noHrPopulation,
+    allRuns: noHrPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 190,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: løb uden puls gør load ikke sammenlignelig i change', noHrOut, (v) =>
+    /^recent: n=2 km=10\.0 t=3600 pace=360\.0 hr=150 load=71 z=3\.2,64\.5,32\.3,0\.0,0\.0 without_analysis=1$/m.test(v) &&
+    /^previous: n=2 km=10\.0 t=3600 pace=360\.0 hr=150 load=142 z=3\.2,64\.5,32\.3,0\.0,0\.0 without_analysis=0$/m.test(v) &&
+    /^change: km=0\.0 % load=n\/a$/m.test(v),
+  );
+  check('agent: løb uden puls tælles i WEEKS without_analysis', noHrOut, (v) =>
+    /^w=2026-W42 r=2 km=10\.0 t=3600 load=71 hr=150 without_analysis=1$/m.test(v) &&
+    /^w=2026-W38 r=2 km=10\.0 t=3600 load=142 hr=150 without_analysis=0$/m.test(v),
+  );
+  check('agent: løb uden puls tælles i STATS without_analysis', noHrOut, (v) =>
+    /^runs=4 km_total=20\.0 median_km=5\.00 without_analysis=1$/m.test(v),
+  );
+
+  // Kontrol: samme population, men løbet har puls og dermed zoner. Så har
+  // begge vinduer to load-bidrag, og change skal vise et load-tal.
+  const noHrControl = mkRun('2026-10-15T10:00:00Z', 'Med puls', 5, 1800, 150, 170, 80, 20);
+  const noHrControlPopulation = [
+    mkRun('2026-10-16T10:00:00Z', 'Med puls', 5, 1800, 150, 170, 80, 20),
+    noHrControl,
+    mkRun('2026-09-15T10:00:00Z', 'Med puls', 5, 1800, 150, 170, 80, 20),
+    mkRun('2026-09-14T10:00:00Z', 'Med puls', 5, 1800, 150, 170, 80, 20),
+  ];
+  const noHrControlOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: noHrControlPopulation.length,
+    runsTotal: noHrControlPopulation.length,
+    runs: noHrControlPopulation,
+    allRuns: noHrControlPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 190,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: change viser load når begge vinduer har lige mange load-bidrag', noHrControlOut, (v) =>
+    /^change: km=0\.0 % load=0\.0 %$/m.test(v),
+  );
+
+  // Det modsatte tilfælde: lige mange analyserede løb i begge vinduer. Så
+  // er load-tallene sammenlignelige, og change må vise et load-tal.
+  const equalWindowPopulation = [
+    mkRun('2026-10-16T10:00:00Z', 'Nyeste', 10, 4000, 155, 175, 88, 50),
+    mkRun('2026-10-14T10:00:00Z', 'Midterste', 5, 2000, 150, 170, 80, 40),
+    mkRun('2026-09-01T10:00:00Z', 'Gammel', 6, 2400, 145, 165, 70, 20),
+    mkRun('2026-09-03T10:00:00Z', 'Gammel', 6, 2400, 145, 165, 70, 20),
+  ];
+  const equalWindowOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: equalWindowPopulation.length,
+    runsTotal: equalWindowPopulation.length,
+    runs: equalWindowPopulation,
+    allRuns: equalWindowPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: change viser load når begge vinduer har lige mange analyserede løb', equalWindowOut, (v) =>
+    /^change: km=25\.0 % load=0\.0 %$/m.test(v),
+  );
+
+  // Ugentlig load kan kun læses som en risiko når begge uger er fuldt
+  // analyserede. Ellers kan en "stigning" være et løb uden sporanalyse.
+  const weekJumpUnanalysed = mkRun('2026-10-07T10:00:00Z', 'Uden fil', 5, 1800, 150, 170, 80, 20);
+  weekJumpUnanalysed.analysis = null;
+  const weekJumpPopulation = [
+    mkRun('2026-10-16T10:00:00Z', 'W42a', 5, 1800, 150, 170, 80, 20),
+    mkRun('2026-10-15T10:00:00Z', 'W42b', 5, 1800, 150, 170, 80, 20),
+    mkRun('2026-10-14T10:00:00Z', 'W42c', 5, 1800, 150, 170, 80, 20),
+    mkRun('2026-10-08T10:00:00Z', 'W41a', 5, 1800, 150, 170, 80, 20),
+    weekJumpUnanalysed,
+  ];
+  const weekJumpOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: weekJumpPopulation.length,
+    runsTotal: weekJumpPopulation.length,
+    runs: weekJumpPopulation,
+    allRuns: weekJumpPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  check('agent: WEEKS viser forskellig without_analysis i de to uger', weekJumpOut, (v) =>
+    /^w=2026-W42 r=3 km=15\.0 t=5400 load=213 hr=150 without_analysis=0$/m.test(v) &&
+    /^w=2026-W41 r=2 km=10\.0 t=3600 load=71 hr=150 without_analysis=1$/m.test(v),
+  );
+  check('agent: SIGNALS kvalificerer ugentlig load-sammenligning', weekJumpOut, (v) =>
+    /^load: .*only when both weeks have without_analysis=0 \(every run has a load\/z contribution\); then a jump > 20 % is a load risk\.$/m.test(v),
+  );
+
+  // SCHEMA skal forklare felterne der faktisk skrives: without_analysis i
+  // alle tre sektioner, at load/z kun dækker løb med et load-bidrag, og hvad
+  // change-linjen gør ved forskellige populationer.
+  check('agent: SCHEMA forklarer without_analysis i WEEKS', weekOut, (v) =>
+    /^week fields: .*without_analysis=runs with no load\/z contribution$/m.test(v),
+  );
+  check('agent: SCHEMA forklarer without_analysis i STATS', weekOut, (v) =>
+    /^stats fields: .*without_analysis=runs with no load\/z contribution/m.test(v),
+  );
+  check('agent: SCHEMA forklarer at load og z kun dækker løb med bidrag', weekOut, (v) =>
+    /^load and zone fields .*cover only runs with a load\/z contribution/m.test(v),
+  );
+  check('agent: SCHEMA forklarer hvad n, km, t og pace dækker', weekOut, (v) =>
+    /^n counts every run in the window; km sums the runs whose km is not missing; t sums the runs whose t is not missing; pace uses only runs with km > 0 and a time, so t\/km can differ from pace\.$/m.test(v),
+  );
+  check('agent: SCHEMA stats-feltlisten har drift_min og drift_max', weekOut, (v) =>
+    /^stats fields: .*drift_avg \| drift_min \| drift_max \| zone_total_pct \| moving_time_total$/m.test(v),
+  );
+  check('agent: SCHEMA forklarer change ved forskellige populationer', changeOut, (v) =>
+    /^change: .*load=n\/a.*different populations/m.test(v),
   );
 
   // Vinduesgrænserne: recent bruger `> cutoff`, previous bruger
@@ -1149,6 +1767,7 @@ try {
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(failures ? `\n${failures} test(s) fejlede` : '\nalle tests bestået');

@@ -59,7 +59,7 @@ export function fmtPace(secPerKm: number | null | undefined): string {
 }
 
 export function fmtDuration(sec: number | null | undefined): string {
-  if (sec == null || !Number.isFinite(sec) || sec <= 0) return '–';
+  if (sec == null || !Number.isFinite(sec) || sec < 0) return '–';
   const total = Math.round(sec);
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
@@ -101,11 +101,15 @@ export function renderMarkdown(input: DigestInput): string {
       `- ${num(stats.distanceKm, 1)} km across ${stats.count} runs (~${num(stats.runsPerWeek, 1)}/week) · longest ${num(stats.longestKm, 1)} km`,
     );
     out.push(`- average: ${fmtPace(stats.avgPaceSecPerKm)} · heart rate ${num(stats.avgHr, 0)}`);
-    const zoneSums = windowZoneSeconds(baselinePool, base, baselineDays);
-    if (zoneSums) {
-      const pcts = zonePcts(zoneSums);
+    const zoneSummary = windowZoneSummary(baselinePool, base, baselineDays);
+    if (zoneSummary) {
+      const pcts = zonePcts(zoneSummary.seconds);
       const easy = (pcts[0] ?? 0) + (pcts[1] ?? 0);
-      out.push(`- zones: ${zoneLine(pcts)} · easy (Z1–Z2) ${fmtPct(easy)} %`);
+      const coverage =
+        zoneSummary.runsWithZones < zoneSummary.runsInWindow
+          ? ` (from ${zoneSummary.runsWithZones} of ${zoneSummary.runsInWindow} runs)`
+          : '';
+      out.push(`- zones: ${zoneLine(pcts)} · easy (Z1–Z2) ${fmtPct(easy)} %${coverage}`);
     }
   }
   out.push('');
@@ -171,13 +175,11 @@ function renderRun(run: DigestedRun, index: number, zoneHint?: string): string[]
   lines.push(
     `- **Run:** ${fmtKm(distanceM)} · ${fmtDuration(movingSec)} · **${fmtPace(avgPace)}** · HR ${num(avgHr, 0)}/${num(maxHr, 0)}${analysis?.avgCadence != null ? ` · cadence ${num(analysis.avgCadence)}` : ''}`,
   );
-  if (analysis) {
-    const extras: string[] = [];
-    if (analysis.elevGainM > 5) extras.push(`${num(analysis.elevGainM)} m elevation`);
-    if (row.relativeEffort != null) extras.push(`RE ${num(row.relativeEffort)}`);
-    if (row.gear) extras.push(row.gear);
-    if (extras.length) lines.push(`- **Metadata:** ${extras.join(' · ')}`);
-  }
+  const extras: string[] = [];
+  if (analysis && analysis.elevGainM > 5) extras.push(`${num(analysis.elevGainM)} m elevation`);
+  if (row.relativeEffort != null) extras.push(`RE ${num(row.relativeEffort)}`);
+  if (row.gear) extras.push(row.gear);
+  if (extras.length) lines.push(`- **Metadata:** ${extras.join(' · ')}`);
   if (analysis?.splits.length) {
     const splits = analysis.splits
       .map(
@@ -245,22 +247,29 @@ function paceFrom(row: ActivityRow): number | null {
 
 /**
  * Summér zone-sekunder over løb i baseline-vinduet — samme udvalg som
- * `windowStats`, men kun løb hvor zonerne faktisk kunne beregnes.
+ * `windowStats`, men kun løb hvor zonerne faktisk kunne beregnes. Tællingen
+ * følger med, så baseline kan vise hvor mange løb zonefordelingen dækker.
  */
-function windowZoneSeconds(runs: DigestedRun[], before: Date, days: number): number[] | null {
+function windowZoneSummary(
+  runs: DigestedRun[],
+  before: Date,
+  days: number,
+): { seconds: number[]; runsWithZones: number; runsInWindow: number } | null {
   const from = new Date(before.getTime() - days * 86_400_000);
   const buckets = [0, 0, 0, 0, 0];
-  let any = false;
+  let runsInWindow = 0;
+  let runsWithZones = 0;
   for (const run of runs) {
     if (!(run.row.date > from && run.row.date <= before)) continue;
+    runsInWindow += 1;
     const zones = run.analysis?.zones;
     if (!zones) continue;
-    any = true;
+    runsWithZones += 1;
     zones.forEach((s, i) => {
       buckets[i] = (buckets[i] ?? 0) + s;
     });
   }
-  return any ? buckets : null;
+  return runsWithZones ? { seconds: buckets, runsWithZones, runsInWindow } : null;
 }
 
 function iso(d: Date): string {

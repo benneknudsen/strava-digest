@@ -10,7 +10,8 @@ export interface Split {
 }
 
 export interface RunAnalysis {
-  movingSec: number;
+  /** effektiv tid fra sporet; null når sporet ikke har nok punkter med tid */
+  movingSec: number | null;
   distanceM: number;
   elevGainM: number;
   avgPaceSecPerKm: number | null;
@@ -45,8 +46,13 @@ export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): Run
 
   const first = pts[0];
   const last = pts[pts.length - 1];
+  // Et spor uden mindst to punkter med tid kan ikke måle varighed. Det er
+  // manglende tid — ikke et rigtigt nul. To punkter med samme tid er derimod
+  // en faktisk måling på 0 sekunder.
   const movingSec =
-    first && last ? Math.max(0, (last.t.getTime() - first.t.getTime()) / 1000 - stops.sec) : 0;
+    first && last && pts.length >= 2
+      ? Math.max(0, (last.t.getTime() - first.t.getTime()) / 1000 - stops.sec)
+      : null;
   // Sessionens totaldistance er det autoritative tal; det sidste punkt
   // kan mangle distance (Strava skriver den kun i hvert andet punkt).
   const lastDist = last?.distM;
@@ -77,7 +83,8 @@ export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): Run
     movingSec,
     distanceM,
     elevGainM: elevationGain(pts),
-    avgPaceSecPerKm: distanceM > 200 ? movingSec / (distanceM / 1000) : null,
+    avgPaceSecPerKm:
+      movingSec != null && distanceM > 200 ? movingSec / (distanceM / 1000) : null,
     avgHr: hoursWeightedMean(pts, (p) => p.hr),
     maxHr: hrs.length ? Math.max(...hrs) : null,
     zones,

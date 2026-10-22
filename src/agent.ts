@@ -43,6 +43,16 @@ export interface AgentInput {
 
 const MISSING = '-';
 
+/**
+ * Et løb bidrager til load og zoner kun når sporet er analyseret OG analysen
+ * gav zone-sekunder. Et løb uden pulssamples har en analyse, men `zones` er
+ * `null`, så det bidrager ikke. Denne prædikat er den eneste definition af
+ * "har et load-bidrag" — gate, WEEKS, WINDOW og STATS bruger den alle.
+ */
+function hasLoad(run: DigestedRun): boolean {
+  return run.analysis != null && run.analysis.zones != null;
+}
+
 /** Tal med punktum som decimaltegn; `null` bliver `-`. */
 function n(v: number | null | undefined, digits = 0): string {
   if (v == null || !Number.isFinite(v)) return MISSING;
@@ -92,6 +102,8 @@ interface WeekBucket {
   load: number;
   hrSum: number;
   hrCount: number;
+  /** Løb uden bidrag til load/z — ikke kun løb uden sporanalyse. */
+  withoutAnalysis: number;
 }
 
 /** Ugeaggregat over alle løb — agenten kan ikke selv gruppere på kalender. */
@@ -109,8 +121,10 @@ function weeklyBuckets(runs: DigestedRun[]): WeekBucket[] {
         load: 0,
         hrSum: 0,
         hrCount: 0,
+        withoutAnalysis: 0,
       };
     b.runs += 1;
+    if (!hasLoad(run)) b.withoutAnalysis += 1;
     if (run.row.distanceM != null) b.km = (b.km ?? 0) + run.row.distanceM / 1000;
     if (run.row.movingSec != null) b.movingSec = (b.movingSec ?? 0) + run.row.movingSec;
     const l = load(run.analysis?.zones ?? null);
@@ -148,7 +162,8 @@ function runLine(run: DigestedRun, withSplits: boolean): string {
   parts.push(`half=${analysis?.secondHalfPaceDeltaSec != null ? n(analysis.secondHalfPaceDeltaSec, 1) : MISSING}`);
   parts.push(`cv=${analysis?.paceCvPct != null ? n(analysis.paceCvPct, 1) : MISSING}`);
   parts.push(`pause=${s(analysis?.pauseCount)}`);
-  parts.push(`load=${load(analysis?.zones ?? null) != null ? n(load(analysis!.zones)) : MISSING}`);
+  const runLoad = load(analysis?.zones ?? null);
+  parts.push(`load=${n(runLoad)}`);
   if (withSplits && analysis?.splits.length) {
     const sp = analysis.splits
       .map((sp2) => `${sp2.km}${sp2.partial ? '*' : ''}:${sp2.paceSecPerKm != null ? n(sp2.paceSecPerKm, 0) : MISSING}@${sp2.avgHr != null ? n(sp2.avgHr) : MISSING}`)
@@ -168,6 +183,7 @@ function windowSummary(runs: DigestedRun[]): {
   avgHr: number | null;
   load: number | null;
   z: number[] | null;
+  withoutAnalysis: number;
 } {
   let km: number | null = null;
   let movingSec: number | null = null;
@@ -177,7 +193,9 @@ function windowSummary(runs: DigestedRun[]): {
   let zoneSecTotal = 0;
   let hrSum = 0;
   let hrCount = 0;
+  let withoutAnalysis = 0;
   for (const run of runs) {
+    if (!hasLoad(run)) withoutAnalysis += 1;
     if (run.row.distanceM != null) km = (km ?? 0) + run.row.distanceM / 1000;
     if (run.row.movingSec != null) movingSec = (movingSec ?? 0) + run.row.movingSec;
     if (run.row.distanceM != null && run.row.distanceM > 0 && run.row.movingSec != null) {
@@ -203,6 +221,7 @@ function windowSummary(runs: DigestedRun[]): {
     avgHr: hrCount ? hrSum / hrCount : null,
     load: load(zoneSecTotal > 0 ? zoneSec : null),
     z: zoneSecTotal > 0 ? zoneSec.map((v) => (v / zoneSecTotal) * 100) : null,
+    withoutAnalysis,
   };
 }
 
@@ -261,7 +280,9 @@ function statsSection(runs: DigestedRun[]): string[] {
   }
 
   out.push('## STATS (whole period)');
-  out.push(`runs=${runs.length} km_total=${n(totalKm, 1)} median_km=${median != null ? n(median, 2) : MISSING}`);
+  out.push(
+    `runs=${runs.length} km_total=${n(totalKm, 1)} median_km=${median != null ? n(median, 2) : MISSING} without_analysis=${runs.filter((r) => !hasLoad(r)).length}`,
+  );
   if (longest) {
     out.push(
       `longest_run=${n((longest.row.distanceM ?? 0) / 1000, 2)} km on ${longest.row.date.toISOString().slice(0, 10)} (${longest.row.name})`,
@@ -332,8 +353,12 @@ export function renderAgent(input: AgentInput): string {
   out.push('  cv=pace consistency, coefficient of variation in % | pause=number of pauses');
   out.push('  load=training load, sum(minutes in zone * 1..5)');
   out.push('  sp=per-km splits: <km>:<pace_s/km>@<avg_hr>, * = partial km');
-  out.push('week fields: w=ISO week | r=runs | km=distance | t=seconds | load=load | hr=average HR');
-  out.push('window fields: n=runs | km | t | pace | hr | load | z=Z1..Z5 %');
+  out.push('week fields: w=ISO week | r=runs | km=distance | t=seconds | load=load | hr=average HR | without_analysis=runs with no load/z contribution');
+  out.push('window fields: n=runs | km | t | pace | hr | load | z=Z1..Z5 % | without_analysis=runs with no load/z contribution');
+  out.push('n counts every run in the window; km sums the runs whose km is not missing; t sums the runs whose t is not missing; pace uses only runs with km > 0 and a time, so t/km can differ from pace.');
+  out.push('stats fields: runs | km_total | median_km | without_analysis=runs with no load/z contribution | longest_run | fastest_avg_pace | max_gap | drift_avg | drift_min | drift_max | zone_total_pct | moving_time_total');
+  out.push('load and zone fields (z, zone_total_pct) cover only runs with a load/z contribution, i.e. an analysed track with zone seconds; without_analysis in STATS, WEEKS and WINDOW is the number of runs in that population without one. Other track-derived fields, such as drift, appear only where the track could compute them.');
+  out.push('change: load is reported only when both windows have the same number of runs with a load/z contribution (n - without_analysis); otherwise load=n/a, because the two load figures then cover different populations. n counts every run; km sums runs whose km is not missing; t sums runs whose t is not missing; pace uses runs with km > 0 and a time.');
   out.push(`decimal=dot | missing=${MISSING} | units=SI except heart rate (bpm) and percent`);
   out.push('');
 
@@ -342,24 +367,24 @@ export function renderAgent(input: AgentInput): string {
   out.push('  < 3 = stable | 3-5 = slightly elevated | > 5 = aerobic capacity under pressure | > 10 = clearly under pressure');
   out.push('half: negative = second half faster than the first (negative split).');
   out.push('cv: pace consistency in %. < 3 = steady | 3-5 = variable | > 5 = uneven (hills, stops, trail).');
-  out.push('load: sum(minutes in zone * 1..5). Compare week to week; a jump > 20 % is a load risk.');
+  out.push('load: sum(minutes in zone * 1..5). Compare week to week only when both weeks have without_analysis=0 (every run has a load/z contribution); then a jump > 20 % is a load risk.');
   out.push('z: percent of moving time in each heart-rate zone. Z1 50-60 %, Z2 60-70 %, Z3 70-80 %, Z4 80-90 %, Z5 90-100 % of max.');
   out.push('  "max" is whichever max_hr the header names. If source=export-observation it is the highest');
-  out.push('  heart rate found in the export, not the user\'s real max: usually a single spike, so it is');
+  out.push('  Max Heart Rate value in the activities CSV, not the user\'s real max: usually a single spike, so it is');
   out.push('  often too high, which makes the training look easier than it is. Say so when you use z.');
   out.push('');
 
   out.push('## WEEKS (newest first)');
   for (const w of weeks) {
     out.push(
-      `w=${w.week} r=${w.runs} km=${n(w.km, 1)} t=${s(w.movingSec)} load=${w.load > 0 ? n(w.load) : MISSING} hr=${w.hrCount ? n(w.hrSum / w.hrCount) : MISSING}`,
+      `w=${w.week} r=${w.runs} km=${n(w.km, 1)} t=${s(w.movingSec)} load=${w.load > 0 ? n(w.load) : MISSING} hr=${w.hrCount ? n(w.hrSum / w.hrCount) : MISSING} without_analysis=${w.withoutAnalysis}`,
     );
   }
   out.push('');
 
   out.push(`## WINDOW (last ${input.baselineDays} days vs. the ${input.baselineDays} days before)`);
   const fmtWin = (x: typeof cur): string =>
-    `n=${x.n} km=${n(x.km, 1)} t=${s(x.movingSec)} pace=${x.pace != null ? n(x.pace, 1) : MISSING} hr=${x.avgHr != null ? n(x.avgHr) : MISSING} load=${x.load != null ? n(x.load) : MISSING} z=${x.z ? x.z.map((p) => n(p, 1)).join(',') : MISSING}`;
+    `n=${x.n} km=${n(x.km, 1)} t=${s(x.movingSec)} pace=${x.pace != null ? n(x.pace, 1) : MISSING} hr=${x.avgHr != null ? n(x.avgHr) : MISSING} load=${x.load != null ? n(x.load) : MISSING} z=${x.z ? x.z.map((p) => n(p, 1)).join(',') : MISSING} without_analysis=${x.withoutAnalysis}`;
   out.push(`recent: ${fmtWin(cur)}`);
   out.push(`previous: ${fmtWin(prev)}`);
   if (cur.n > 0 && prev.n > 0) {
@@ -371,8 +396,10 @@ export function renderAgent(input: AgentInput): string {
       cur.load != null && prev.load != null && prev.load > 0
         ? ((cur.load - prev.load) / prev.load) * 100
         : null;
+    const loadComparable =
+      cur.n - cur.withoutAnalysis === prev.n - prev.withoutAnalysis;
     out.push(
-      `change: km=${dKm != null ? n(dKm, 1) : MISSING} % load=${dLoad != null ? n(dLoad, 1) : MISSING} %`,
+      `change: km=${dKm != null ? n(dKm, 1) : MISSING} % load=${loadComparable ? `${dLoad != null ? n(dLoad, 1) : MISSING} %` : 'n/a'}`,
     );
   }
   out.push('');

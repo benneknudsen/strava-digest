@@ -85,14 +85,60 @@ export function normalizeType(type: string): string {
     .trim();
 }
 
-export function toActivities(table: CsvTable, map: ColumnMap): ActivityRow[] {
-  const out: ActivityRow[] = [];
+export interface ActivityStats {
+  /** Every activity row in the CSV, including rows that were skipped. */
+  rowsInExport: number;
+  /** Rows dropped because the date was missing or could not be parsed. These rows are not in the digest. */
+  skippedNoDate: number;
+  /** Of `skippedNoDate`, rows that also had no file name. */
+  skippedNoDateNoFilename: number;
+  /**
+   * Highest max heart rate among the rows dropped for a missing or unparsable
+   * date. They are not in the digest, but their Max HR is still a real
+   * observation from the export, so the observed max can include it.
+   */
+  maxHrOfSkipped: number | null;
+}
+
+export interface ParsedActivities {
+  activities: ActivityRow[];
+  stats: ActivityStats;
+}
+
+/**
+ * Build the activity rows from the CSV.
+ *
+ * A row without a file name is still a real activity. Its distance and time
+ * fields may be present in the CSV, and they may also be blank; this function
+ * keeps whatever the CSV has and lets the caller decide what to do with it.
+ * The row is kept with an empty `filename`, so the caller can mark it as
+ * unanalysed instead of dropping it silently. Whether it reaches the digest
+ * depends on the caller's activity-type filter. A row whose date is missing or
+ * cannot be parsed cannot be placed on the timeline; it is counted in `stats`
+ * instead.
+ */
+export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActivities {
+  const activities: ActivityRow[] = [];
+  const stats: ActivityStats = {
+    rowsInExport: table.rows.length,
+    skippedNoDate: 0,
+    skippedNoDateNoFilename: 0,
+    maxHrOfSkipped: null,
+  };
   for (const row of table.rows) {
     const date = parseDate(raw(row, map, 'date'));
     const filename = raw(row, map, 'filename');
-    if (!date || !filename) continue;
+    const maxHr = num(row, map, 'maxHr');
+    if (!date) {
+      stats.skippedNoDate += 1;
+      if (!filename) stats.skippedNoDateNoFilename += 1;
+      if (maxHr != null && maxHr > 0) {
+        stats.maxHrOfSkipped = Math.max(stats.maxHrOfSkipped ?? 0, maxHr);
+      }
+      continue;
+    }
     const type = raw(row, map, 'type');
-    out.push({
+    activities.push({
       id: raw(row, map, 'id'),
       date,
       name: raw(row, map, 'name') || '(uden navn)',
@@ -101,7 +147,7 @@ export function toActivities(table: CsvTable, map: ColumnMap): ActivityRow[] {
       movingSec: durationSec(row, map, 'movingSec'),
       elapsedSec: durationSec(row, map, 'elapsedSec'),
       avgHr: num(row, map, 'avgHr'),
-      maxHr: num(row, map, 'maxHr'),
+      maxHr,
       relativeEffort: num(row, map, 'relativeEffort'),
       elevationGain: num(row, map, 'elevationGain'),
       calories: num(row, map, 'calories'),
@@ -110,8 +156,8 @@ export function toActivities(table: CsvTable, map: ColumnMap): ActivityRow[] {
       isRun: RUN_TYPES.includes(normalizeType(type)),
     });
   }
-  out.sort((a, b) => b.date.getTime() - a.date.getTime());
-  return out;
+  activities.sort((a, b) => b.date.getTime() - a.date.getTime());
+  return { activities, stats };
 }
 
 /** Sum over a trailing window (used for the baseline block). */
@@ -119,14 +165,19 @@ export function windowStats(runs: ActivityRow[], days: number, before: Date) {
   const from = new Date(before.getTime() - days * 86_400_000);
   const inWindow = runs.filter((r) => r.date > from && r.date <= before);
   const distanceKm = inWindow.reduce((s, r) => s + (r.distanceM ?? 0) / 1000, 0);
-  const movingSec = inWindow.reduce((s, r) => s + (r.movingSec ?? 0), 0);
+  // Pace needs both distance and time, and uses the same filter as the agent format.
+  const paceRows = inWindow.filter(
+    (r) => (r.distanceM ?? 0) > 0 && r.movingSec != null,
+  );
+  const paceSec = paceRows.reduce((s, r) => s + r.movingSec!, 0);
+  const paceKm = paceRows.reduce((s, r) => s + r.distanceM! / 1000, 0);
   const hrSamples = inWindow.map((r) => r.avgHr).filter((h): h is number => h != null);
   return {
     days,
     count: inWindow.length,
     distanceKm,
     runsPerWeek: (inWindow.length / days) * 7,
-    avgPaceSecPerKm: distanceKm > 0 && movingSec > 0 ? movingSec / distanceKm : null,
+    avgPaceSecPerKm: paceKm > 0 ? paceSec / paceKm : null,
     avgHr: hrSamples.length ? hrSamples.reduce((a, b) => a + b, 0) / hrSamples.length : null,
     longestKm: inWindow.reduce((m, r) => Math.max(m, (r.distanceM ?? 0) / 1000), 0),
   };
