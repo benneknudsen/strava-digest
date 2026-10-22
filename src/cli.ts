@@ -12,7 +12,7 @@ import { discoverSources, pickSource, searchDirs, type Candidate } from './inter
 import { installSkill, renderInstall } from './install.ts';
 import { collectActivityFiles, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
 import { type ExportSource, findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
-import { type ActivityRow, toActivities } from './strava.ts';
+import { type ActivityRow, type ActivityStats, parseActivities } from './strava.ts';
 import { resolveZoneConfig } from './zones.ts';
 
 interface Args {
@@ -185,15 +185,20 @@ async function runBulk(
 ): Promise<number> {
   const csv = parseCsv((await source.read(found.csv)).toString('utf8'));
   const map = mapColumns(csv);
-  const activities = toActivities(csv, map);
+  const { activities, stats } = parseActivities(csv, map);
 
   if (args.list) {
     for (const a of activities.slice(0, 400)) {
+      const file = a.filename || '(no file)';
       console.log(
-        `${a.date.toISOString().slice(0, 10)}  ${a.isRun ? 'RUN' : '   '}  ${a.type.padEnd(14)}  ${a.filename}  zones: ${await zoneStatus(source, found.root, a.filename)}`,
+        `${a.date.toISOString().slice(0, 10)}  ${a.isRun ? 'RUN' : '   '}  ${a.type.padEnd(14)}  ${file}  zones: ${await zoneStatus(source, found.root, a.filename)}`,
       );
     }
-    console.log(`\n${activities.length} activities in total (shown: ${Math.min(400, activities.length)})`);
+    console.log(`\n${stats.rowsInExport} activities in total (shown: ${Math.min(400, activities.length)})`);
+    const skipped = stats.skippedNoDate;
+    if (skipped) {
+      console.log(`\nSkipped: ${skipped} row${skipped === 1 ? '' : 's'} with a missing or unparsable date.`);
+    }
     if (map.unmatched.length) console.log(`\nUnmapped columns: ${map.unmatched.join(' · ')}`);
     return 0;
   }
@@ -210,13 +215,27 @@ async function runBulk(
 
   // Den højeste puls i eksporten bruges som zone-fallback, så den skal
   // ligge FØR analysen — ellers ville turene blive analyseret uden zoner.
-  const observedMaxHr = observedMaxHeartRate(activities);
+  const observedMaxHr = observedMaxHeartRate(activities, stats.maxHrOfSkipped);
 
   // Alle løb i pool'en analyseres én gang, og resultaterne genbruges til
   // både digesten og baseline. At analysere to gange ville double-parse
   // hver fil og gøre hele eksporten unødigt langsom.
   const analysed: DigestedRun[] = [];
   for (const row of pool) {
+    if (!row.filename) {
+      // A row without a file is a real activity: its CSV distance and time
+      // stay in the digest. Every track-derived field stays missing, though —
+      // elev, z, drift, half, cv, pause and load come from the file. So
+      // `elev=-` is deliberate even when the CSV has an Elevation Gain
+      // column; mixing CSV elevation into track analysis would make the two
+      // sources incomparable.
+      analysed.push({
+        row,
+        analysis: null,
+        error: 'no activity file in the export',
+      });
+      continue;
+    }
     const entry = resolveActivityEntry(source, found.root, row.filename);
     if (!entry) {
       analysed.push({ row, analysis: null, error: `file not found in the archive (${row.filename})` });
@@ -248,11 +267,20 @@ async function runBulk(
     : [];
 
   const contextText = await readContext(args.context);
+  const usesObservedMaxHr = args.maxHr == null && observedMaxHr != null;
   const zoneSource: 'flag' | 'fit' | 'export-observation' | null =
-    args.maxHr != null ? 'flag' : observedMaxHr != null ? 'export-observation' : null;
+    args.maxHr != null ? 'flag' : usesObservedMaxHr ? 'export-observation' : null;
+  const noFilenameInPool = pool.filter((row) => !row.filename).length;
+  const coverage = coverageNotes(stats, noFilenameInPool);
+  const hostNotes = [
+    ...(map.unmatched.length
+      ? ['Add aliases in src/columns.ts if a field is missing from the digest.']
+      : []),
+    ...coverage,
+  ];
   const input = {
     sourceLabel: source.label,
-    activitiesInExport: activities.length,
+    activitiesInExport: stats.rowsInExport,
     runsTotal: pool.length,
     runs: chosen,
     baselineRuns,
@@ -264,29 +292,60 @@ async function runBulk(
     maxHr: args.maxHr ?? observedMaxHr ?? null,
     maxHrSource: zoneSource,
     notes: [
+      ...coverage,
       ...(map.unmatched.length
         ? [
             `${map.unmatched.length} Strava columns in the export are not used — they hold weather, gear ` +
               'and other non-training data. Run with --format md to list them.',
           ]
         : []),
-      ...(args.maxHr == null && observedMaxHr != null
+      ...(usesObservedMaxHr
         ? [
-            `max_hr=${observedMaxHr} is the highest heart-rate value in the export (observed), not your watch's own max HR. ` +
+            `max_hr=${observedMaxHr} is the highest Max Heart Rate value in the activities CSV (observed), not your watch's own max HR; heart-rate samples in the track files are not scanned. ` +
               "Strava's bulk export does not contain the watch's zone configuration, so the zone boundaries are a best guess.",
           ]
         : []),
     ],
-    zoneHint:
-      args.maxHr == null && observedMaxHr != null
-        ? `zones use the highest heart rate in the export (${observedMaxHr}) — it is observed, not your watch's max. Pass --max-hr <your max> to use your own.`
-        : undefined,
-    hostNote: map.unmatched.length
-      ? 'Add aliases in src/columns.ts if a field is missing from the digest.'
+    zoneHint: usesObservedMaxHr
+      ? `zones use the highest Max Heart Rate value in the activities CSV (${observedMaxHr}) — it is observed, not your watch's max. Pass --max-hr <your max> to use your own.`
       : undefined,
+    hostNote: hostNotes.length ? hostNotes.join(' ') : undefined,
   };
 
   return emitDigest(input, args, analysed);
+}
+
+/**
+ * Notes about rows that are only partly represented in the digest.
+ *
+ * The note for rows without a file name describes the rows themselves: they
+ * have no track analysis, and their distance and time come from the CSV. That
+ * stays true in every format and with --last, whether or not the rows are
+ * shown. Rows skipped for a missing or unparsable date are counted at export
+ * level and are not in the digest.
+ * Each note has its own gate: a clean export gets no note, and a missing file
+ * name is reported even when no row was dropped.
+ */
+function coverageNotes(stats: ActivityStats, noFilenameInPool: number): string[] {
+  const notes: string[] = [];
+  const { skippedNoDate, skippedNoDateNoFilename } = stats;
+  if (skippedNoDate > 0) {
+    const singleRow = skippedNoDate === 1;
+    const skippedNote = `${skippedNoDate} ${singleRow ? 'row was' : 'rows were'} skipped because of a missing or unparsable date and ${singleRow ? 'is' : 'are'} not in the digest`;
+    const also =
+      skippedNoDateNoFilename > 0
+        ? ` (${skippedNoDateNoFilename} of them ${skippedNoDateNoFilename === 1 ? 'was' : 'were'} also without a file name)`
+        : '';
+    notes.push(`${skippedNote}${also}.`);
+  }
+
+  if (noFilenameInPool > 0) {
+    const singleNoFilename = noFilenameInPool === 1;
+    notes.push(
+      `${noFilenameInPool} ${singleNoFilename ? 'row has' : 'rows have'} no file name, so ${singleNoFilename ? 'it has' : 'they have'} no track analysis; ${singleNoFilename ? 'its' : 'their'} distance and time come from the CSV.`,
+    );
+  }
+  return notes;
 }
 
 /* ------------------------------------------------- løse aktivitetsfiler */
@@ -481,9 +540,24 @@ async function readContext(path: string): Promise<string> {
  * — det er blot det bedste bud på brugerens max-puls, når urets egen
  * zonekonfiguration mangler i filerne. Vises som et forslag, aldrig som
  * en sandhed.
+ *
+ * Rækker uden fil tæller med: de er en del af eksporten, og deres Max HR
+ * står i CSV'en. Rækker der blev droppet for en manglende eller ufortolkbar
+ * dato tæller også med, via `maxHrOfSkipped`; deres puls er stadig en
+ * observation fra eksporten. At ekskludere nogen af dem ville gøre
+ * "højeste puls i eksporten" usandt.
+ *
+ * Formuleringen "the highest heart rate it observed in the export" står også i
+ * README.md (Notes on the data → Zones). Denne funktion læser kun CSV-kolonnen
+ * `Max Heart Rate` — puls-samples i spor-filerne scannes ikke. Hvis denne
+ * definition ændres, skal README.md følge med i samme ændring.
  */
-function observedMaxHeartRate(activities: ActivityRow[]): number | null {
+function observedMaxHeartRate(
+  activities: ActivityRow[],
+  maxHrOfSkipped: number | null,
+): number | null {
   const values = activities.map((a) => a.maxHr).filter((v): v is number => v != null && v > 0);
+  if (maxHrOfSkipped != null && maxHrOfSkipped > 0) values.push(maxHrOfSkipped);
   return values.length ? Math.max(...values) : null;
 }
 
