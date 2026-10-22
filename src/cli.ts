@@ -10,8 +10,9 @@ import { renderMarkdown, type DigestInput, type DigestedRun } from './digest.ts'
 import { renderAgent } from './agent.ts';
 import { discoverSources, pickSource, searchDirs, type Candidate } from './interactive.ts';
 import { installSkill, renderInstall } from './install.ts';
+import { activityFormatOf, limitForFileName, tooLargeError } from './limits.ts';
 import { collectActivityFiles, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
-import { type ExportSource, findActivitiesCsv, openSource, resolveActivityEntry } from './source.ts';
+import { type ExportSource, findActivitiesCsv, openSource, readFileLimited, resolveActivityEntry } from './source.ts';
 import { type ActivityRow, type ActivityStats, parseActivities } from './strava.ts';
 import { resolveZoneConfig } from './zones.ts';
 
@@ -242,6 +243,18 @@ async function runBulk(
       continue;
     }
     try {
+      // The parser decides what the file is. A name that no parser accepts
+      // must fail before the read: `Big.gpx.csv` gets the 100 MB export limit
+      // from its suffix, but no parser can use it, and reading 98 MB only to
+      // throw costs about 3x the file size in memory. The size check still
+      // runs first so an oversized unknown file reports the limit it actually
+      // got ("other files"), not a parse error after a full read.
+      if (activityFormatOf(entry) == null) {
+        const size = await source.size(entry);
+        const limit = limitForFileName(entry);
+        if (size > limit) throw tooLargeError(entry, size);
+        throw new Error(`unknown activity format: ${entry}`);
+      }
       const buf = await source.read(entry);
       const track = parseActivityBuffer(entry, buf);
       analysed.push({
@@ -272,10 +285,12 @@ async function runBulk(
     args.maxHr != null ? 'flag' : usesObservedMaxHr ? 'export-observation' : null;
   const noFilenameInPool = pool.filter((row) => !row.filename).length;
   const coverage = coverageNotes(stats, noFilenameInPool);
+  const sourceNotes = source.warnings();
   const hostNotes = [
     ...(map.unmatched.length
       ? ['Add aliases in src/columns.ts if a field is missing from the digest.']
       : []),
+    ...sourceNotes,
     ...coverage,
   ];
   const input = {
@@ -292,6 +307,7 @@ async function runBulk(
     maxHr: args.maxHr ?? observedMaxHr ?? null,
     maxHrSource: zoneSource,
     notes: [
+      ...sourceNotes,
       ...coverage,
       ...(map.unmatched.length
         ? [
@@ -375,7 +391,7 @@ async function runLoose(
   const entries: LooseEntry[] = [];
   for (const file of files) {
     try {
-      const track = parseActivityBuffer(file, await readFile(file));
+      const track = parseActivityBuffer(file, await readFileLimited(file, basename(file)));
       const analysis = analyseRun(track, resolveZoneConfig(args.maxHr, track.zones));
       const row = rowFromTrack(file, track, analysis);
       entries.push({
@@ -571,7 +587,7 @@ function parseMaxHr(value: string): number {
 
 /** Svarer kort på om aktivitetsfilen selv indeholder zonedata (kun FIT kan). */
 async function zoneStatus(source: ExportSource, root: string, filename: string): Promise<'yes' | 'no'> {
-  if (!/\.fit(\.gz)?$/i.test(filename.trim())) return 'no';
+  if (activityFormatOf(filename) !== 'fit') return 'no';
   const entry = resolveActivityEntry(source, root, filename);
   if (!entry) return 'no';
   try {

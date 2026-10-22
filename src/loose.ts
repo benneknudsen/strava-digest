@@ -2,6 +2,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { Track } from './activity.ts';
 import type { RunAnalysis } from './analysis.ts';
+import { activityFormatOf } from './limits.ts';
 import { RUN_TYPES, type ActivityRow } from './strava.ts';
 
 /**
@@ -10,10 +11,8 @@ import { RUN_TYPES, type ActivityRow } from './strava.ts';
  * (Relative Effort, udstyr, kalorier) udelades frem for at blive opdigtet.
  */
 
-const ACTIVITY_FILE_RE = /\.(fit|gpx|tcx)(\.gz)?$/i;
-
 export function isActivityFile(name: string): boolean {
-  return ACTIVITY_FILE_RE.test(name.trim());
+  return activityFormatOf(name) != null;
 }
 
 /**
