@@ -1131,6 +1131,171 @@ try {
   const isoDate = parseDate('2026-10-16T08:18:29Z');
   check('ISO-dato tolkes uændret', isoDate?.toISOString(), (v) => v === '2026-10-16T08:18:29.000Z');
 
+  // ISO uden zone må ikke afhænge af maskinens TZ. Barneprocessen kører
+  // samme parsing i tre zoner; de skal give præcis samme instant. Barnet
+  // printer også sin offset, så testen kan springes over på platforme hvor
+  // TZ ikke slår igennem (fx Windows), i stedet for at bestå tomt.
+  const parseIsoInTz = (tz) =>
+    execFileSync(
+      process.execPath,
+      ['-e', "import('./src/columns.ts').then(({ parseDate }) => { const d = parseDate('2026-10-16T08:18:29'); process.stdout.write(JSON.stringify({ offset: new Date().getTimezoneOffset(), iso: d ? d.toISOString() : 'null' })); })"],
+      { cwd: repoRoot, env: { ...process.env, TZ: tz }, encoding: 'utf8' },
+    );
+  const tzResults = ['UTC', 'Europe/Copenhagen', 'America/New_York'].map((tz) => JSON.parse(parseIsoInTz(tz)));
+  if (new Set(tzResults.map((r) => r.offset)).size !== 3) {
+    console.log('skip: TZ not honoured on this platform');
+  } else {
+    check('ISO uden zone er tidszone-uafhængig', tzResults.map((r) => r.iso), (v) =>
+      v.every((iso) => iso === '2026-10-16T08:18:29.000Z'),
+    );
+  }
+  check('ISO uden zone med millisekunder', parseDate('2026-10-16T08:18:29.123')?.toISOString(), (v) =>
+    v === '2026-10-16T08:18:29.123Z',
+  );
+  check('ISO uden zone med mellemrum', parseDate('2026-10-16 08:18:29')?.toISOString(), (v) =>
+    v === '2026-10-16T08:18:29.000Z',
+  );
+  check('ISO ren dato er midnat UTC', parseDate('2026-10-16')?.toISOString(), (v) =>
+    v === '2026-10-16T00:00:00.000Z',
+  );
+  check('ISO med offset respekteres', parseDate('2026-10-16T10:18:29+02:00')?.toISOString(), (v) =>
+    v === '2026-10-16T08:18:29.000Z',
+  );
+  check('ugyldig ISO giver null', parseDate('2026-13-40T99:99:99'), (v) => v === null);
+  // Date.UTC ruller over (måned 13 → januar næste år), så en ugyldig
+  // kalenderdato skal afvises eksplicit i stedet for at blive en forkert dato.
+  check('ISO med 30. februar giver null', parseDate('2026-02-30'), (v) => v === null);
+  check('RFC 2822 med GMT', parseDate('Tue, 12 Oct 2026 06:32:10 GMT')?.toISOString(), (v) =>
+    v === '2026-10-12T06:32:10.000Z',
+  );
+  // RFC-grenen skal validere dagen ligesom de andre grene. Uden det ruller
+  // new Date() 31. februar videre til 3. marts.
+  check('RFC 2822 med 31. februar giver null', parseDate('Tue, 31 Feb 2026 06:32:10 GMT'), (v) => v === null);
+
+  // Klokkeslættet skal valideres efter AM/PM-justering. Date.UTC ruller
+  // ellers 25:00 videre til næste dag, og 06:61 til næste time.
+  check('time 25 giver null', parseDate('2026/10/12 25:00'), (v) => v === null);
+  check('time 25 med punktum giver null', parseDate('12.10.2026 25:00'), (v) => v === null);
+  check('minut 61 giver null', parseDate('12.10.2026 06:61'), (v) => v === null);
+  check('uoverensstemmende AM/PM giver null', parseDate('Oct 12, 2026, 13:32:10 PM'), (v) => v === null);
+  check('12 AM er midnat', parseDate('Oct 12, 2026, 12:32:10 AM')?.toISOString(), (v) =>
+    v === '2026-10-12T00:32:10.000Z',
+  );
+
+  // Numerisk dato uden klokkeslæt bruger samme orden som den tidsbærende
+  // gren: punktum og bindestreg er dag-først, skråstreg er måned-først (US).
+  // Klokkeslættet er midnat UTC.
+  check('numerisk dato uden klokkeslæt med punktum', parseDate('12.10.2026')?.toISOString(), (v) =>
+    v === '2026-10-12T00:00:00.000Z',
+  );
+  check('numerisk dato uden klokkeslæt med bindestreg', parseDate('12-10-2026')?.toISOString(), (v) =>
+    v === '2026-10-12T00:00:00.000Z',
+  );
+  check('numerisk dato uden klokkeslæt med skråstreg er måned-først', parseDate('10/12/2026')?.toISOString(), (v) =>
+    v === '2026-10-12T00:00:00.000Z',
+  );
+  check('numerisk dato med klokkeslæt er uændret', parseDate('12.10.2026 06:32')?.toISOString(), (v) =>
+    v === '2026-10-12T06:32:00.000Z',
+  );
+  check('skråstreg med klokkeslæt er uændret', parseDate('10/12/2026 06:32')?.toISOString(), (v) =>
+    v === '2026-10-12T06:32:00.000Z',
+  );
+
+  // Primær orden bruges når den er en rigtig kalenderdato. Er den ugyldig,
+  // prøves den anden orden, og den bruges kun hvis den også er gyldig.
+  check('skråstreg med måned 13 falder tilbage til dag-først', parseDate('13/12/2020')?.toISOString(), (v) =>
+    v === '2020-12-13T00:00:00.000Z',
+  );
+  check('punktum med måned 13 falder tilbage til måned-først', parseDate('12.13.2020')?.toISOString(), (v) =>
+    v === '2020-12-13T00:00:00.000Z',
+  );
+  check('umulig kalenderdato 31.02 giver null', parseDate('31.02.2026'), (v) => v === null);
+  check('dag 00 giver null', parseDate('00.10.2026'), (v) => v === null);
+  check('årstal først med måned 13 giver null', parseDate('2026/13/12'), (v) => v === null);
+  check('numerisk dato med hale giver null', parseDate('12.10.2026x'), (v) => v === null);
+  check('numerisk dato med T-tid giver null', parseDate('12.10.2026T06:32'), (v) => v === null);
+
+  // En aktivitet kan ikke starte i morgen. Datoer mere end ét døgn ude i
+  // fremtiden afvises, så de ikke flytter digestens anker. Tolerancen på et
+  // døgn dækker tidszoneforskelle mellem eksportens UTC-stempler og uret.
+  check('dato klart i fremtiden giver null', parseDate('2099-01-01'), (v) => v === null);
+  check('dato i fortiden er ikke null', parseDate('2020-01-01'), (v) => v !== null);
+  const inTwelveHours = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+  check('dato 12 timer ude i fremtiden er inden for tolerancen', parseDate(inTwelveHours), (v) => v !== null);
+  // 13/12/2026 er en rigtig dato (13. december), og fallbacken til dag-først
+  // er korrekt. Den giver kun null her, fordi datoen ligger mere end ét døgn
+  // ude i fremtiden. Efter december 2026 er den ikke længere fremtidig.
+  const dec132026 = new Date('2026-12-13T00:00:00Z').getTime();
+  if (dec132026 > Date.now() + 24 * 60 * 60 * 1000) {
+    check('13/12/2026 giver null fordi den er i fremtiden', parseDate('13/12/2026'), (v) => v === null);
+  } else {
+    check('13/12/2026 er ikke længere i fremtiden', parseDate('13/12/2026')?.toISOString(), (v) =>
+      v === '2026-12-13T00:00:00.000Z',
+    );
+  }
+
+  // Samme streng må ikke give forskellig dato med og uden klokkeslæt.
+  const sameDateDifferentTime = (a, b) => {
+    const da = parseDate(a)?.toISOString();
+    const db = parseDate(b)?.toISOString();
+    return da != null && db != null && da.slice(0, 10) === db.slice(0, 10) && da !== db;
+  };
+  check(
+    'skråstreg: samme dato med og uden klokkeslæt',
+    sameDateDifferentTime('10/12/2026', '10/12/2026 06:32'),
+    (v) => v === true,
+  );
+  check(
+    'punktum: samme dato med og uden klokkeslæt',
+    sameDateDifferentTime('12.10.2026', '12.10.2026 06:32'),
+    (v) => v === true,
+  );
+  check('ufortolkbar streng giver null', parseDate('not-a-date'), (v) => v === null);
+
+  // Formater som før kun overlevede via new Date(s): månedsnavn uden
+  // klokkeslæt (README bruger "Oct 12, 2026") og årstal først med skråstreg.
+  check('månedsnavn uden klokkeslæt (engelsk)', parseDate('October 12, 2026')?.toISOString(), (v) =>
+    v === '2026-10-12T00:00:00.000Z',
+  );
+  check('månedsnavn uden klokkeslæt (dansk)', parseDate('12. okt. 2026')?.toISOString(), (v) =>
+    v === '2026-10-12T00:00:00.000Z',
+  );
+  check('årstal først med skråstreg', parseDate('2026/10/12')?.toISOString(), (v) =>
+    v === '2026-10-12T00:00:00.000Z',
+  );
+
+  // En eksportrække med numerisk dato uden klokkeslæt må ikke havne i
+  // december. Agentformatet viser datoen som ISO, så testen er TZ-uafhængig.
+  const numericDateDir = writeExport('numeric-date', [
+    '1,12.10.2026,Date only,Løb,1800,1800,5.0,170,150,',
+  ]);
+  const numericDateAgent = execFileSync(process.execPath, ['src/cli.ts', numericDateDir], { encoding: 'utf8' });
+  check('dato uden klokkeslæt: løbet havner på 12. oktober', numericDateAgent, (v) =>
+    /^d=2026-10-12T00:00:00\.000Z /m.test(v),
+  );
+
+  // En fremtidig række må ikke flytte digestens anker. De fem løb i
+  // september-oktober er historikken; december-rækken skal tælles som
+  // sprunget over og efterlade WINDOW på de fem. Brug 2099 hvis 13/12/2026
+  // allerede er passeret, så testen ikke afhænger af kørselsdatoen.
+  const futureSlash = dec132026 > Date.now() + 24 * 60 * 60 * 1000 ? '13/12/2026' : '13/12/2099';
+  const futureDateDir = writeExport('future-date', [
+    '1,"Sep 14, 2026, 6:32:10 AM",Run 1,Løb,1800,1800,5.0,170,150,',
+    '2,"Sep 20, 2026, 6:32:10 AM",Run 2,Løb,1800,1800,5.0,170,150,',
+    '3,"Sep 27, 2026, 6:32:10 AM",Run 3,Løb,1800,1800,5.0,170,150,',
+    '4,"Oct 1, 2026, 6:32:10 AM",Run 4,Løb,1800,1800,5.0,170,150,',
+    '5,"Oct 10, 2026, 6:32:10 AM",Run 5,Løb,1800,1800,5.0,170,150,',
+    `6,${futureSlash},Future,Løb,1800,1800,5.0,170,150,`,
+  ]);
+  const futureDateAgent = execFileSync(process.execPath, ['src/cli.ts', futureDateDir], { encoding: 'utf8' });
+  check('fremtidig række: WINDOW tæller kun de fem historiske løb', futureDateAgent, (v) =>
+    /^recent: n=5 /m.test(v),
+  );
+  check('fremtidig række: rækken er ikke i digesten', futureDateAgent, (v) => !v.includes('n="Future"'));
+  check('fremtidig række: NOTES rapporterer den sprungne række', futureDateAgent, (v) =>
+    /^- 1 row was skipped because of a missing or unparsable date and is not in the digest \(1 of them was also without a file name\)\.$/m.test(v),
+  );
+
   // Strava skriver månedsnavnet på kontosproget. Samme dato skal kunne læses
   // på engelsk, dansk, tysk, fransk, svensk og spansk.
   const monthForms = [

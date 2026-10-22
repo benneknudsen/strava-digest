@@ -392,21 +392,69 @@ function normalizeMonthKey(monthName: string): string {
     .trim();
 }
 
+/** true kun når y/m/d findes i kalenderen — Date.UTC ruller ellers over. */
+function isRealDate(year: number, monthIndex: number, day: number): boolean {
+  if (monthIndex < 0 || monthIndex > 11 || day < 1 || day > 31) return false;
+  const d = new Date(Date.UTC(year, monthIndex, day));
+  return d.getUTCFullYear() === year && d.getUTCMonth() === monthIndex && d.getUTCDate() === day;
+}
+
 /**
  * Strava localises the export, and the date is part of it: an English account
  * writes "Oct 12, 2026, 6:32:10 AM", a Danish one "12. okt. 2026, 06:32" —
  * which `new Date()` cannot read at all. Worse, `new Date("12.10.2026")` parses
  * as 10 December (US order), so a silent fallback would invent wrong dates.
- * We therefore parse explicitly. The export carries local wall-clock time with
- * no zone; it is interpreted as the machine's local zone (Europe/Copenhagen).
+ * We therefore parse explicitly. The export carries UTC wall-clock time with
+ * no zone; when the string has no explicit zone it is interpreted as UTC, so
+ * the result does not depend on the machine's timezone.
+ *
+ * Calendar and clock values are validated, so `Date.UTC` cannot roll a bad
+ * date or time into the next day. Dates more than one day in the future are
+ * rejected, because an activity cannot start tomorrow; this also keeps a bad
+ * row from moving the digest's anchor. A string that cannot be parsed returns
+ * `null`, and `parseActivities` reports it as a skipped row. The
+ * `Date.toString()` form ("Mon Oct 12 2026 06:32:10 GMT+0200 (...)") is not a
+ * Strava format and is no longer parsed; such a row is now reported instead of
+ * disappearing.
  */
 export function parseDate(v: string): Date | null {
+  const d = parseDateUnchecked(v);
+  if (!d) return null;
+  return d.getTime() > Date.now() + 24 * 60 * 60 * 1000 ? null : d;
+}
+
+function parseDateUnchecked(v: string): Date | null {
   const s = v.trim().replace(/\s+/g, ' ');
   if (!s) return null;
 
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-    const iso = new Date(s);
+    // Validate the calendar date before new Date() rolls it over: "2026-02-30"
+    // must be null, not 2 March.
+    const [year, month, day] = s.slice(0, 10).split('-').map(Number);
+    if (!isRealDate(year!, month! - 1, day!)) return null;
+    // An explicit zone suffix is honoured as written. Without one the export's
+    // wall-clock time is UTC, so append Z; a bare date becomes midnight UTC.
+    const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s);
+    const iso = new Date(hasZone ? s : `${s}Z`);
     return Number.isNaN(iso.getTime()) ? null : iso;
+  }
+
+  // RFC 2822 with an explicit zone, e.g. "Tue, 12 Oct 2026 06:32:10 GMT".
+  // Parse the fields ourselves and run them through build(), so the calendar
+  // date and the clock are validated like every other branch. The explicit
+  // zone makes the result TZ-independent.
+  const rfc = s.match(
+    /^[A-Za-z]{3},? (\d{1,2}) ([A-Za-z]{3}) (\d{4}) (\d{2}):(\d{2})(?::(\d{2}))? (GMT|UTC|([+-])(\d{2})(\d{2}))$/i,
+  );
+  if (rfc) {
+    const local = build(Number(rfc[3]), rfc[2]!, Number(rfc[1]), rfc[4]!, rfc[5]!, rfc[6]);
+    if (!local) return null;
+    if (/^(?:GMT|UTC)$/i.test(rfc[7]!)) return local;
+    const offsetHours = Number(rfc[9]);
+    const offsetMinutes = Number(rfc[10]);
+    if (offsetHours > 23 || offsetMinutes > 59) return null;
+    const offset = (rfc[8] === '-' ? -1 : 1) * (offsetHours * 60 + offsetMinutes);
+    return new Date(local.getTime() - offset * 60_000);
   }
 
   // "12. okt. 2026, 06:32(:10)" / "12 oktober 2026 06.32"
@@ -423,28 +471,75 @@ export function parseDate(v: string): Date | null {
   if (mdy) return build(Number(mdy[3]), mdy[1]!, Number(mdy[2]), mdy[4]!, mdy[5]!, mdy[6], mdy[7]);
 
   // "12.10.2026 06:32" (dot/dash = day first) / "10/12/2026 06:32" (slash = US)
+  // The time is optional, so the bare date uses the same order. Slash is
+  // month-first because Strava writes it that way for a US account. If the
+  // primary order is not a real calendar date, try the other order once; this
+  // keeps "12.13.2026" as 13 December while "10/12/2026" stays 12 October.
   const numeric = s.match(
-    /^(\d{1,2})([./-])(\d{1,2})\2(\d{4}),?\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*(am|pm)?/i,
+    /^(\d{1,2})([./-])(\d{1,2})\2(\d{4})(?:,?\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*(am|pm)?)?$/i,
   );
   if (numeric) {
     const dayFirst = numeric[2] !== '/';
     const a = Number(numeric[1]);
     const b = Number(numeric[3]);
-    return build(
-      Number(numeric[4]),
+    const year = Number(numeric[4]);
+    const hour = numeric[5] ?? '0';
+    const minute = numeric[6] ?? '0';
+    const primary = build(
+      year,
       null,
       dayFirst ? a : b,
-      numeric[5]!,
-      numeric[6]!,
+      hour,
+      minute,
       numeric[7],
       numeric[8],
       // month index, not the 1-based month in the string
       (dayFirst ? b : a) - 1,
     );
+    if (primary) return primary;
+    return build(
+      year,
+      null,
+      dayFirst ? b : a,
+      hour,
+      minute,
+      numeric[7],
+      numeric[8],
+      (dayFirst ? a : b) - 1,
+    );
   }
 
-  const native = new Date(s);
-  return Number.isNaN(native.getTime()) ? null : native;
+  // Date-only forms from the same languages: "12. okt. 2026" /
+  // "12 de octubre de 2026" / "October 12, 2026".
+  const dmyDate = s.match(
+    /^(\d{1,2})\.?\s+(?:de\s+)?([A-Za-z\u00C0-\u024FæøåÆØÅ]+)\.?(?:\s+de)?,?\s+(\d{4})$/i,
+  );
+  if (dmyDate) return build(Number(dmyDate[3]), dmyDate[2]!, Number(dmyDate[1]), '0', '0');
+
+  const mdyDate = s.match(
+    /^([A-Za-z\u00C0-\u024FæøåÆØÅ]+)\.?\s+(\d{1,2}),?\s+(\d{4})$/i,
+  );
+  if (mdyDate) return build(Number(mdyDate[3]), mdyDate[1]!, Number(mdyDate[2]), '0', '0');
+
+  // "2026/10/12" and "2026.10.12", with or without a time.
+  const yearFirst = s.match(
+    /^(\d{4})([./])(\d{1,2})\2(\d{1,2})(?:,?\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*(am|pm)?)?$/i,
+  );
+  if (yearFirst) {
+    return build(
+      Number(yearFirst[1]),
+      null,
+      Number(yearFirst[4]),
+      yearFirst[5] ?? '0',
+      yearFirst[6] ?? '0',
+      yearFirst[7],
+      yearFirst[8],
+      // month index, not the 1-based month in the string
+      Number(yearFirst[3]) - 1,
+    );
+  }
+
+  return null;
 }
 
 function build(
@@ -462,17 +557,27 @@ function build(
     month = MONTHS[normalizeMonthKey(monthName!)];
   }
   if (month == null) return null;
+  if (!isRealDate(year, month, day)) return null;
 
   let h = Number(hour);
   const ampm = meridiem?.toLowerCase();
-  if (ampm === 'pm' && h < 12) h += 12;
-  if (ampm === 'am' && h === 12) h = 0;
+  if (ampm) {
+    // AM/PM is only meaningful for a 12-hour clock.
+    if (h < 1 || h > 12) return null;
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+  }
+  const m = Number(minute);
+  const sec = Number(second ?? 0);
+  // Date.UTC rolls 25:00 into the next day and 06:61 into the next hour, so
+  // validate the clock before building the date.
+  if (h < 0 || h > 23 || m < 0 || m > 59 || sec < 0 || sec > 59) return null;
 
   // Eksportens tidsstempler er UTC — bekræftet mod FIL- og GPX-filerne i
   // samme arkiv, hvor de har præcis samme værdi som sessionens start_time.
   // Derfor tolkes datoen som UTC. Gengivelsen i digesten sker så i
   // maskinens lokale zone, altså løberens egen klokke.
-  const d = new Date(Date.UTC(year, month, day, h, Number(minute), Number(second ?? 0)));
+  const d = new Date(Date.UTC(year, month, day, h, m, sec));
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
