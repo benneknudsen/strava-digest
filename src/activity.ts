@@ -1,5 +1,6 @@
 import { gunzipSync } from 'node:zlib';
 import FitParser from 'fit-file-parser';
+import { activityFormatOf, formatMb, limitForFileName } from './limits.ts';
 
 export interface TrackPoint {
   t: Date;
@@ -43,14 +44,18 @@ export interface Track {
 }
 
 export function parseActivityBuffer(filename: string, raw: Buffer): Track {
-  const lower = filename.toLowerCase();
+  const format = activityFormatOf(filename);
+  if (!format) throw new Error(`unknown activity format: ${filename}`);
   // Suffixet skal læses FØR `.gz` pakkes ud: `tur.tcx.gz` er stadig en TCX.
-  const ext = lower.replace(/\.gz$/, '');
-  const buf = lower.endsWith('.gz') ? maybeGunzip(raw) : raw;
-  if (ext.includes('.fit')) return parseFit(buf);
-  if (ext.endsWith('.gpx')) return parseGpx(buf.toString('utf8'));
-  if (ext.endsWith('.tcx')) return parseTcx(buf.toString('utf8'));
-  throw new Error(`unknown activity format: ${filename}`);
+  const buf = filename.trim().toLowerCase().endsWith('.gz') ? maybeGunzip(filename, raw) : raw;
+  switch (format) {
+    case 'fit':
+      return parseFit(buf);
+    case 'gpx':
+      return parseGpx(buf.toString('utf8'));
+    case 'tcx':
+      return parseTcx(buf.toString('utf8'));
+  }
 }
 
 /* -------------------------------------------------------------------- FIT */
@@ -313,13 +318,26 @@ function finite(v: unknown): number | undefined {
 
 /**
  * `.gz` in the filename is not a promise: mislabelled entries exist in the wild.
- * If it does not actually decompress, fall back to the raw bytes.
+ * Content without the gzip magic bytes falls back to the raw bytes.
+ *
+ * Content with the magic bytes is a gzip file. A corrupt or truncated stream
+ * must fail honestly instead of falling back to bytes that cannot parse. A
+ * stream that expands past the activity-file limit is a zip bomb; zlib's
+ * ERR_BUFFER_TOO_LARGE gets its own message.
  */
-function maybeGunzip(buf: Buffer): Buffer {
+function maybeGunzip(filename: string, buf: Buffer): Buffer {
+  const isGzip = buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+  if (!isGzip) return buf;
+  const limit = limitForFileName(filename);
   try {
-    return gunzipSync(buf);
-  } catch {
-    return buf;
+    return gunzipSync(buf, { maxOutputLength: limit });
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') {
+      throw new Error(
+        `${filename} unpacks to more than ${formatMb(limit)} — a Strava export does not ship activity files that size.`,
+      );
+    }
+    throw new Error(`${filename} is a corrupt gzip file`);
   }
 }
 

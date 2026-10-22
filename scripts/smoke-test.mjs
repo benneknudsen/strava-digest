@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { crc32, createDeflateRaw, createGzip, gzipSync } from 'node:zlib';
 import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
 import { mapColumns, num, parseDate } from '../src/columns.ts';
@@ -13,7 +14,14 @@ import { parseCsv } from '../src/csv.ts';
 import { renderMarkdown, fmtDuration, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
 import { discoverSources } from '../src/interactive.ts';
-import { isActivityFile, rowFromTrack } from '../src/loose.ts';
+import { collectActivityFiles, isActivityFile, rowFromTrack } from '../src/loose.ts';
+import {
+  ACTIVITY_FILE_LIMIT_BYTES,
+  activityFormatOf,
+  EXPORT_FILE_LIMIT_BYTES,
+  limitForFileName,
+  tooLargeError,
+} from '../src/limits.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
 import { normalizeType, parseActivities, RUN_TYPES } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
@@ -956,6 +964,24 @@ try {
   check('isActivityFile: .tcx', isActivityFile('a.tcx'), (v) => v === true);
   check('isActivityFile: .csv er ikke aktivitet', isActivityFile('activities.csv'), (v) => v === false);
   check('isActivityFile: .jpg er ikke aktivitet', isActivityFile('media/photo.jpg'), (v) => v === false);
+  check('isActivityFile: mid-name .fit følger parseren', isActivityFile('Tur.fit.bak'), (v) => v === true);
+  check('isActivityFile: .gpx.bak er ikke aktivitet', isActivityFile('Tur.gpx.bak'), (v) => v === false);
+
+  const fitBakDir = scratch('fit-bak');
+  copyFileSync(join(repoRoot, 'fixtures', 'sample.fit'), join(fitBakDir, 'Tur.fit.bak'));
+  copyFileSync(join(repoRoot, 'fixtures', 'sample.fit'), join(fitBakDir, 'Tur2.fit'));
+  const fitBakFiles = await collectActivityFiles(fitBakDir);
+  check('loose: mid-name .fit samles som i bulk-stien', fitBakFiles.length, (v) => v === 2);
+  check('loose: både Tur.fit.bak og Tur2.fit samles', {
+    bak: fitBakFiles.some((f) => f.endsWith('Tur.fit.bak')),
+    plain: fitBakFiles.some((f) => f.endsWith('Tur2.fit')),
+  }, (v) => v.bak === true && v.plain === true);
+  const fitBakCandidates = await discoverSources([fitBakDir]);
+  check('discover: mid-name .fit tælles som aktivitetsfil', fitBakCandidates.find((c) => c.path === fitBakDir)?.count ?? null, (v) => v === 2);
+  const fitBakList = execFileSync('node', ['src/cli.ts', fitBakDir, '--list'], { encoding: 'utf8' });
+  check('loose --list: begge mid-name-filer er aktiviteter', fitBakList, (v) =>
+    v.includes('Tur.fit.bak') && v.includes('Tur2.fit'),
+  );
 
   utimesSync(looseDir, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
   utimesSync(tmp, new Date('2025-01-01T00:00:00Z'), new Date('2025-01-01T00:00:00Z'));
@@ -1929,6 +1955,651 @@ try {
     const previous = v.match(/^previous: .*$/m)?.[0] ?? '';
     return /n=1 km=10\.0 /.test(recent) && /n=1 km=8\.0 /.test(previous);
   });
+
+  /* ---- regression (issue #16): unsafe zip entry names and entry size ---- */
+
+  function buildZip(entries) {
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    for (const entry of entries) {
+      const name = Buffer.from(entry.name, 'utf8');
+      const data = entry.compressed ?? Buffer.from(entry.data ?? '');
+      const method = entry.compressionMethod ?? 0;
+      const uncompressedSize =
+        entry.uncompressedSize ?? (entry.data != null ? Buffer.byteLength(entry.data) : data.length);
+      const crc = entry.crc ?? crc32(data);
+
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(0x0800, 6);
+      local.writeUInt16LE(method, 8);
+      local.writeUInt32LE(crc >>> 0, 14);
+      local.writeUInt32LE(data.length, 18);
+      local.writeUInt32LE(uncompressedSize, 22);
+      local.writeUInt16LE(name.length, 26);
+      localParts.push(local, name, data);
+
+      const central = Buffer.alloc(46);
+      central.writeUInt32LE(0x02014b50, 0);
+      central.writeUInt16LE(20, 4);
+      central.writeUInt16LE(20, 6);
+      central.writeUInt16LE(0x0800, 8);
+      central.writeUInt16LE(method, 10);
+      central.writeUInt32LE(crc >>> 0, 16);
+      central.writeUInt32LE(data.length, 20);
+      central.writeUInt32LE(uncompressedSize, 24);
+      central.writeUInt16LE(name.length, 28);
+      central.writeUInt32LE(offset, 42);
+      centralParts.push(central, name);
+
+      offset += 30 + name.length + data.length;
+    }
+    const localPart = Buffer.concat(localParts);
+    const centralPart = Buffer.concat(centralParts);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(entries.length, 8);
+    eocd.writeUInt16LE(entries.length, 10);
+    eocd.writeUInt32LE(centralPart.length, 12);
+    eocd.writeUInt32LE(localPart.length, 16);
+    return Buffer.concat([localPart, centralPart, eocd]);
+  }
+
+  function replaceZipEntryName(zip, from, to) {
+    const fromBytes = Buffer.from(from, 'utf8');
+    const toBytes = Buffer.from(to, 'utf8');
+    if (fromBytes.length !== toBytes.length) {
+      throw new Error(`zip entry names must have the same length: ${from} != ${to}`);
+    }
+    const out = Buffer.from(zip);
+    let index = 0;
+    let replacements = 0;
+    while ((index = out.indexOf(fromBytes, index)) !== -1) {
+      toBytes.copy(out, index);
+      index += toBytes.length;
+      replacements++;
+    }
+    if (!replacements) throw new Error(`zip entry name not found: ${from}`);
+    return out;
+  }
+
+  function compressZeros(createStream, uncompressedBytes) {
+    return new Promise((resolve, reject) => {
+      const stream = createStream();
+      const chunks = [];
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
+      const chunk = Buffer.alloc(1024 * 1024);
+      let remaining = uncompressedBytes;
+      const pump = () => {
+        while (remaining > 0) {
+          const size = Math.min(remaining, chunk.length);
+          remaining -= size;
+          if (!stream.write(size === chunk.length ? chunk : chunk.subarray(0, size))) {
+            stream.once('drain', pump);
+            return;
+          }
+        }
+        stream.end();
+      };
+      pump();
+    });
+  }
+
+  const deflateBomb = (uncompressedBytes) => compressZeros(createDeflateRaw, uncompressedBytes);
+  const gzipBomb = (uncompressedBytes) => compressZeros(createGzip, uncompressedBytes);
+
+  const fixtureZip = buildZip([
+    { name: 'activities.csv', data: readFileSync(join(tmp, 'activities.csv')) },
+    { name: 'activities/Run-1001.gpx', data: readFileSync(join(tmp, 'activities/Run-1001.gpx')) },
+    { name: 'activities/Run-1002.tcx', data: readFileSync(join(tmp, 'activities/Run-1002.tcx')) },
+    { name: 'activities/Run-1003.gpx', data: readFileSync(join(tmp, 'activities/Run-1003.gpx')) },
+    { name: 'decoy-file.fit', data: 'decoy' },
+    { name: 'placeholder', data: 'decoy' },
+    { name: 'decoy11.fit', data: 'decoy' },
+  ]);
+
+  const writeZip = (name, buffer) => {
+    const dir = scratch(name);
+    const file = join(dir, 'export.zip');
+    writeFileSync(file, buffer);
+    return file;
+  };
+  const runZipCli = (args) => {
+    try {
+      return {
+        status: 0,
+        stdout: execFileSync(process.execPath, [join(repoRoot, 'src', 'cli.ts'), ...args], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }),
+        stderr: '',
+      };
+    } catch (err) {
+      return {
+        status: err.status ?? null,
+        stdout: String(err.stdout ?? ''),
+        stderr: String(err.stderr ?? ''),
+      };
+    }
+  };
+  const parseJson = (text) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  };
+  const skippedNote = (n) =>
+    n === 1
+      ? '1 entry in the archive was skipped because its name is not a safe relative path.'
+      : `${n} entries in the archive were skipped because their names are not safe relative paths.`;
+
+  const badName = writeZip(
+    'zip-bad-name',
+    replaceZipEntryName(fixtureZip, 'decoy-file.fit', '../../evil.fit'),
+  );
+  const badNameRun = runZipCli([badName]);
+  check('zip: unsafe entry name does not kill the archive', badNameRun.status, (v) => v === 0);
+  check('zip: unsafe entry name still gives a digest', badNameRun.stdout, (v) =>
+    v.includes('# STRAVA DIGEST v2 (agent-format)') && /^d=\d{4}-/m.test(v) && /^runs=3 /m.test(v),
+  );
+  check('zip: skipped entry is reported in NOTES', badNameRun.stdout, (v) =>
+    v.includes(`- ${skippedNote(1)}`),
+  );
+  check('zip: unsafe entry name is not leaked into the digest', badNameRun.stdout, (v) =>
+    !v.includes('evil.fit'),
+  );
+
+  const badNameJson = parseJson(runZipCli([badName, '--json']).stdout);
+  check('zip: skipped entry is in JSON notes', badNameJson?.notes ?? null, (v) =>
+    Array.isArray(v) && v.includes(skippedNote(1)),
+  );
+  check('zip: skipped entry is in JSON markdown', badNameJson?.markdown ?? null, (v) =>
+    typeof v === 'string' && v.includes(`- ${skippedNote(1)}`),
+  );
+  check('zip: skipped entry is in Markdown notes', runZipCli([badName, '--format', 'md']).stdout, (v) =>
+    v.includes(`- ${skippedNote(1)}`),
+  );
+
+  const cleanZip = writeZip('zip-clean', fixtureZip);
+  const cleanRun = runZipCli([cleanZip]);
+  check('zip: clean archive still gives a digest', cleanRun.status, (v) => v === 0);
+  check('zip: clean archive has no skipped-entry note', cleanRun.stdout, (v) =>
+    !v.includes(skippedNote(1)) && !v.includes(skippedNote(2)),
+  );
+  const cleanJson = parseJson(runZipCli([cleanZip, '--json']).stdout);
+  check('zip: clean JSON notes have no skipped-entry note', cleanJson?.notes ?? null, (v) =>
+    Array.isArray(v) && !v.some((note) => note.includes('skipped because')),
+  );
+  check('zip: clean Markdown has no skipped-entry note', runZipCli([cleanZip, '--format', 'md']).stdout, (v) =>
+    !v.includes('skipped because'),
+  );
+
+  const declaredTooLarge = writeZip(
+    'zip-declared-too-large',
+    buildZip([
+      {
+        name: 'activities.csv',
+        data: Buffer.from('Activity ID\n'),
+        uncompressedSize: 250 * 1024 * 1024,
+      },
+    ]),
+  );
+  const declaredTooLargeRun = runZipCli([declaredTooLarge]);
+  check('zip: declared oversize entry exits non-zero', declaredTooLargeRun.status, (v) => v !== 0);
+  check('zip: declared oversize entry has a clear message', declaredTooLargeRun.stderr, (v) =>
+    v.includes(
+      'activities.csv is 250 MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size.',
+    ),
+  );
+  check('zip: declared oversize error is not a stack trace', declaredTooLargeRun.stderr, (v) =>
+    !/^\s+at /m.test(v),
+  );
+
+  const bomb = await deflateBomb(101 * 1024 * 1024);
+  const lyingTooLarge = writeZip(
+    'zip-lying-size',
+    buildZip([
+      {
+        name: 'activities.csv',
+        compressed: bomb,
+        compressionMethod: 8,
+        uncompressedSize: 1024,
+        crc: 0,
+      },
+    ]),
+  );
+  const lyingTooLargeRun = runZipCli([lyingTooLarge]);
+  check('zip: actual bytes over the limit abort the read', lyingTooLargeRun.status, (v) => v !== 0);
+  check('zip: actual bytes over the limit give a clear message', lyingTooLargeRun.stderr, (v) =>
+    /activities\.csv is \d+(?:\.\d+)? MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size\./.test(v),
+  );
+  check('zip: actual-size error is not a stack trace', lyingTooLargeRun.stderr, (v) =>
+    !/^\s+at /m.test(v),
+  );
+
+  let absoluteZip = replaceZipEntryName(fixtureZip, 'placeholder', '/etc/passwd');
+  absoluteZip = replaceZipEntryName(absoluteZip, 'decoy11.fit', 'C:/evil.fit');
+  const absoluteRun = runZipCli([writeZip('zip-absolute', absoluteZip)]);
+  check('zip: absolute entry names do not kill the archive', absoluteRun.status, (v) => v === 0);
+  check('zip: absolute entry names are reported', absoluteRun.stdout, (v) =>
+    v.includes(`- ${skippedNote(2)}`),
+  );
+  check('zip: absolute paths are not leaked into the digest', absoluteRun.stdout, (v) =>
+    !v.includes('/etc/passwd') && !v.includes('C:/evil.fit'),
+  );
+
+  const uncZip = replaceZipEntryName(fixtureZip, 'decoy-file.fit', '\\\\server\\share');
+  const uncRun = runZipCli([writeZip('zip-unc', uncZip)]);
+  check('zip: UNC entry name does not kill the archive', uncRun.status, (v) => v === 0);
+  check('zip: UNC entry name is reported', uncRun.stdout, (v) =>
+    v.includes(`- ${skippedNote(1)}`),
+  );
+
+  /* ---- regression (issue #16): gzip output must respect the entry limit ---- */
+
+  // The zip limit only covers the bytes in the zip entry. An older export can
+  // store a `.gz` file, and that gzip payload can expand far past the limit.
+  const gzFixture = readFileSync(join(tmp, 'activities', 'Run-1001.gpx'));
+  const plainGzTrack = parseActivityBuffer('Good.gpx', gzFixture);
+  const normalGzTrack = parseActivityBuffer('Good.gpx.gz', gzipSync(gzFixture));
+  check('gz: normal gzip file still parses', normalGzTrack.points.length, (v) =>
+    v === plainGzTrack.points.length,
+  );
+  check('gz: normal gzip file keeps the same distance', normalGzTrack.points.at(-1)?.distM, (v) =>
+    v === plainGzTrack.points.at(-1)?.distM,
+  );
+
+  const mislabelledTrack = parseActivityBuffer('Mislabelled.gpx.gz', gzFixture);
+  check('gz: non-gzip file still falls back to the raw bytes', mislabelledTrack.points.length, (v) =>
+    v === plainGzTrack.points.length,
+  );
+
+  const thrownMessage = (fn) => {
+    try {
+      fn();
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  const corruptGz = Buffer.from(gzipSync(gzFixture));
+  corruptGz.fill(0xff, 10, corruptGz.length - 8);
+  check('gz: corrupt body is an honest error', thrownMessage(() => parseActivityBuffer('Corrupt.gpx.gz', corruptGz)), (v) =>
+    v === 'Corrupt.gpx.gz is a corrupt gzip file',
+  );
+
+  const truncatedGz = gzipSync(gzFixture).subarray(0, 20);
+  check('gz: truncated file is an honest error', thrownMessage(() => parseActivityBuffer('Truncated.gpx.gz', truncatedGz)), (v) =>
+    v === 'Truncated.gpx.gz is a corrupt gzip file',
+  );
+
+  /* ---- regression (issue #16): activity files have their own limit ---- */
+
+  const activityCsv = Buffer.from(
+    [
+      csvHeader,
+      '1,"Oct 12, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+      '2,"Oct 11, 2026, 6:32:10 AM",Big,Løb,1800,1800,5.0,170,150,Big.fit',
+    ].join('\n') + '\n',
+  );
+
+  const bigFitZip = writeZip(
+    'zip-big-fit',
+    buildZip([
+      { name: 'activities.csv', data: activityCsv },
+      { name: 'activities/Good.gpx', data: gzFixture },
+      {
+        name: 'activities/Big.fit',
+        compressed: await deflateBomb(12 * 1024 * 1024),
+        compressionMethod: 8,
+        uncompressedSize: 12 * 1024 * 1024,
+        crc: 0,
+      },
+    ]),
+  );
+  const bigFitRun = runZipCli([bigFitZip]);
+  check('zip: 12 MB activity file does not kill the run', bigFitRun.status, (v) => v === 0);
+  check('zip: 12 MB activity file becomes one row error', bigFitRun.stdout, (v) =>
+    v.includes(
+      'err="activities/Big.fit is 12 MB, which is larger than the 10 MB limit for activity files — a Strava export does not ship activity files that size."',
+    ),
+  );
+  check('zip: other runs are still analysed next to a too-large file', bigFitRun.stdout, (v) =>
+    /^d=\S+ n="Good" km=5\.00 /m.test(v),
+  );
+
+  const hugeFitBytes = Math.floor(98.7 * 1024 * 1024);
+  const hugeFitZip = writeZip(
+    'zip-huge-fit',
+    buildZip([
+      { name: 'activities.csv', data: activityCsv },
+      { name: 'activities/Good.gpx', data: gzFixture },
+      {
+        name: 'activities/Big.fit',
+        compressed: await deflateBomb(hugeFitBytes),
+        compressionMethod: 8,
+        uncompressedSize: hugeFitBytes,
+        crc: 0,
+      },
+    ]),
+  );
+  const hugeFitRun = runZipCli([hugeFitZip]);
+  check('zip: 98.7 MB activity file does not kill the run', hugeFitRun.status, (v) => v === 0);
+  check('zip: 98.7 MB activity file becomes one row error', hugeFitRun.stdout, (v) =>
+    v.includes(
+      'err="activities/Big.fit is 98.7 MB, which is larger than the 10 MB limit for activity files — a Strava export does not ship activity files that size."',
+    ),
+  );
+  check('zip: 98.7 MB activity file still gives the rest of the digest', hugeFitRun.stdout, (v) =>
+    /^d=\S+ n="Good" km=5\.00 /m.test(v),
+  );
+
+  // The limit and the parser must answer "is this an activity file?" the same
+  // way. These names are FIT-parsed today because `.fit` appears anywhere in
+  // the name, so the 10 MB limit must cover them too.
+  const bypassNames = ['Big.fit.bak', 'Big.fit (1).gz', 'Big.FIT.GZ', 'Big.fit.gz.bak'];
+  for (const name of bypassNames) {
+    check(`format: ${name} is FIT`, activityFormatOf(name), (v) => v === 'fit');
+    check(`limit: ${name} gets the activity limit`, limitForFileName(name), (v) =>
+      v === ACTIVITY_FILE_LIMIT_BYTES,
+    );
+  }
+  check('format: a plain .fit is FIT', activityFormatOf('Good.fit'), (v) => v === 'fit');
+  check('format: a plain .gpx is GPX', activityFormatOf('Good.gpx'), (v) => v === 'gpx');
+  check('format: a .tcx.gz is TCX', activityFormatOf('Good.tcx.gz'), (v) => v === 'tcx');
+  check('format: a CSV is not an activity', activityFormatOf('activities.csv'), (v) => v === null);
+  check('limit: a CSV keeps the export limit', limitForFileName('activities.csv'), (v) =>
+    v === EXPORT_FILE_LIMIT_BYTES,
+  );
+  check('limit: an unknown file gets the low limit', limitForFileName('media/photo.jpg'), (v) =>
+    v === ACTIVITY_FILE_LIMIT_BYTES,
+  );
+  // A file that parses as FIT must also get the FIT limit. If the parser keeps
+  // `includes('.fit')` while the limit goes back to the suffix regex, this
+  // fails before the 98 MB integration run can OOM.
+  check('parser and limit agree on a mid-name .fit', {
+    source: parseActivityBuffer('Good.fit.bak', fitBuffer).source,
+    limit: limitForFileName('Good.fit.bak'),
+  }, (v) => v.source === 'fit' && v.limit === ACTIVITY_FILE_LIMIT_BYTES);
+
+  // The parser wins over the suffix: `Big.fit.csv` is parsed as FIT, so the
+  // 10 MB activity limit must cover it even though the name ends in .csv.
+  check('format: Big.fit.csv is FIT', activityFormatOf('Big.fit.csv'), (v) => v === 'fit');
+  check('limit: Big.fit.csv gets the activity limit', limitForFileName('Big.fit.csv'), (v) =>
+    v === ACTIVITY_FILE_LIMIT_BYTES,
+  );
+  check('format: Big.gpx.csv is not GPX', activityFormatOf('Big.gpx.csv'), (v) => v === null);
+  check('limit: Big.gpx.csv keeps the export limit', limitForFileName('Big.gpx.csv'), (v) =>
+    v === EXPORT_FILE_LIMIT_BYTES,
+  );
+  check('format: Big.tcx.csv is not TCX', activityFormatOf('Big.tcx.csv'), (v) => v === null);
+  check('limit: Big.tcx.csv keeps the export limit', limitForFileName('Big.tcx.csv'), (v) =>
+    v === EXPORT_FILE_LIMIT_BYTES,
+  );
+  check('limit: Big.gpx.bak gets the low limit', limitForFileName('Big.gpx.bak'), (v) =>
+    v === ACTIVITY_FILE_LIMIT_BYTES,
+  );
+  check('error: Big.fit.csv names the activity limit', tooLargeError('Big.fit.csv', hugeFitBytes).message, (v) =>
+    v.includes('10 MB limit for activity files') && !v.includes('export files'),
+  );
+  check('error: Big.gpx.bak names the other-files limit', tooLargeError('Big.gpx.bak', hugeFitBytes).message, (v) =>
+    v.includes('10 MB limit for other files') && !v.includes('export files'),
+  );
+  check('error: activities.csv names the export limit', tooLargeError('activities.csv', hugeFitBytes).message, (v) =>
+    v.includes('100 MB limit for export files') && !v.includes('other files'),
+  );
+
+  for (const name of bypassNames) {
+    const bypassCsv = Buffer.from(
+      [
+        csvHeader,
+        '1,"Oct 12, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+        `2,"Oct 11, 2026, 6:32:10 AM",Bad,Løb,1800,1800,5.0,170,150,"${name}"`,
+      ].join('\n') + '\n',
+    );
+    const bypassZip = writeZip(
+      `zip-bypass-${bypassNames.indexOf(name)}`,
+      buildZip([
+        { name: 'activities.csv', data: bypassCsv },
+        { name: 'activities/Good.gpx', data: gzFixture },
+        {
+          name: `activities/${name}`,
+          compressed: await deflateBomb(hugeFitBytes),
+          compressionMethod: 8,
+          uncompressedSize: hugeFitBytes,
+          crc: 0,
+        },
+      ]),
+    );
+    const bypassRun = runZipCli([bypassZip]);
+    check(`zip: 98 MB ${name} does not kill the run`, bypassRun.status, (v) => v === 0);
+    check(`zip: 98 MB ${name} becomes one row error`, bypassRun.stdout, (v) =>
+      v.includes(
+        `err="activities/${name} is 98.7 MB, which is larger than the 10 MB limit for activity files — a Strava export does not ship activity files that size."`,
+      ),
+    );
+    check(`zip: 98 MB ${name} still gives the rest of the digest`, bypassRun.stdout, (v) =>
+      /^d=\S+ n="Good" km=5\.00 /m.test(v),
+    );
+  }
+
+  // A `.csv` suffix must not change which parser runs, and it must not make us
+  // read a file no parser can use. Big.fit.csv is FIT and gets the 10 MB
+  // activity limit. Big.gpx.csv and Big.tcx.csv stay export files by suffix,
+  // but no parser accepts them, so the row fails before the read — a 98 MB
+  // read would cost ~276 MB RSS for a row that can only produce an error.
+  // Big.gpx.bak is neither an activity nor a CSV, so its error names the
+  // "other files" limit it actually got.
+  const namedCsv = Buffer.from(
+    [
+      csvHeader,
+      '1,"Oct 12, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+      '2,"Oct 11, 2026, 6:32:10 AM",FitCsv,Løb,1800,1800,5.0,170,150,Big.fit.csv',
+      '3,"Oct 10, 2026, 6:32:10 AM",GpxCsv,Løb,1800,1800,5.0,170,150,Big.gpx.csv',
+      '4,"Oct 9, 2026, 6:32:10 AM",TcxCsv,Løb,1800,1800,5.0,170,150,Big.tcx.csv',
+      '5,"Oct 8, 2026, 6:32:10 AM",Bak,Løb,1800,1800,5.0,170,150,Big.gpx.bak',
+    ].join('\n') + '\n',
+  );
+  const hugeZeros = await deflateBomb(hugeFitBytes);
+  const namedCsvZip = writeZip(
+    'zip-named-csv',
+    buildZip([
+      { name: 'activities.csv', data: namedCsv },
+      { name: 'activities/Good.gpx', data: gzFixture },
+      {
+        name: 'activities/Big.fit.csv',
+        compressed: hugeZeros,
+        compressionMethod: 8,
+        uncompressedSize: hugeFitBytes,
+        crc: 0,
+      },
+      {
+        name: 'activities/Big.gpx.csv',
+        compressed: hugeZeros,
+        compressionMethod: 8,
+        uncompressedSize: hugeFitBytes,
+        crc: 0,
+      },
+      {
+        name: 'activities/Big.tcx.csv',
+        compressed: hugeZeros,
+        compressionMethod: 8,
+        uncompressedSize: hugeFitBytes,
+        crc: 0,
+      },
+      {
+        name: 'activities/Big.gpx.bak',
+        compressed: hugeZeros,
+        compressionMethod: 8,
+        uncompressedSize: hugeFitBytes,
+        crc: 0,
+      },
+    ]),
+  );
+
+  const namedRssDir = scratch('named-csv-rss');
+  const namedRssFile = join(namedRssDir, 'maxrss');
+  const namedPreload = join(namedRssDir, 'maxrss.cjs');
+  writeFileSync(
+    namedPreload,
+    "const fs = require('node:fs');\n" +
+      "process.on('exit', () => fs.writeFileSync(process.env.STRAVA_DIGEST_MAX_RSS, String(process.resourceUsage().maxRSS)));\n",
+  );
+  let namedRun;
+  try {
+    namedRun = {
+      status: 0,
+      stdout: execFileSync(
+        process.execPath,
+        ['--require', namedPreload, cliPath, namedCsvZip],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, STRAVA_DIGEST_MAX_RSS: namedRssFile },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+      stderr: '',
+    };
+  } catch (err) {
+    namedRun = {
+      status: err.status ?? null,
+      stdout: String(err.stdout ?? ''),
+      stderr: String(err.stderr ?? ''),
+    };
+  }
+  const namedLine = (name) =>
+    namedRun.stdout.split('\n').find((line) => line.startsWith('d=') && line.includes(`n="${name}"`)) ?? '';
+  check('zip: Big.fit.csv does not kill the run', namedRun.status, (v) => v === 0);
+  check('zip: Big.fit.csv uses the activity limit', namedLine('FitCsv'), (v) =>
+    v.includes(
+      'err="activities/Big.fit.csv is 98.7 MB, which is larger than the 10 MB limit for activity files — a Strava export does not ship activity files that size."',
+    ),
+  );
+  check('zip: Big.gpx.csv fails before it is read', namedLine('GpxCsv'), (v) =>
+    v.includes('err="unknown activity format: activities/Big.gpx.csv"'),
+  );
+  check('zip: Big.tcx.csv fails before it is read', namedLine('TcxCsv'), (v) =>
+    v.includes('err="unknown activity format: activities/Big.tcx.csv"'),
+  );
+  check('zip: Big.gpx.bak names the other-files limit', namedLine('Bak'), (v) =>
+    v.includes(
+      'err="activities/Big.gpx.bak is 98.7 MB, which is larger than the 10 MB limit for other files — a Strava export does not ship files that size."',
+    ),
+  );
+  check('zip: named-CSV rows still give the rest of the digest', namedRun.stdout, (v) =>
+    /^d=\S+ n="Good" km=5\.00 /m.test(v),
+  );
+  const namedMaxRssKb = existsSync(namedRssFile) ? Number(readFileSync(namedRssFile, 'utf8')) : NaN;
+  if (Number.isFinite(namedMaxRssKb) && namedMaxRssKb > 0) {
+    console.log(`      named-CSV max RSS: ${Math.round(namedMaxRssKb / 1024)} MB`);
+    check('zip: unknown activity names are not read at the export limit', namedMaxRssKb, (v) => v < 200 * 1024);
+  } else {
+    console.log('skip: maxRSS not reported on this platform');
+  }
+
+  const goodFitCsv = Buffer.from(
+    [
+      csvHeader,
+      '1,"Oct 12, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.fit',
+    ].join('\n') + '\n',
+  );
+  const goodFitZip = writeZip(
+    'zip-good-fit',
+    buildZip([
+      { name: 'activities.csv', data: goodFitCsv },
+      { name: 'activities/Good.fit', data: fitBuffer },
+    ]),
+  );
+  const goodFitRun = runZipCli([goodFitZip]);
+  check('zip: a small Good.fit still parses', goodFitRun.status, (v) => v === 0);
+  check('zip: a small Good.fit is in the digest', goodFitRun.stdout, (v) =>
+    /^d=\S+ n="Good" /m.test(v),
+  );
+
+  const largeDir = scratch('dir-big-fit');
+  writeFileSync(join(largeDir, 'activities.csv'), Buffer.from(`${csvHeader}\n`));
+  writeFileSync(join(largeDir, 'Big.fit'), Buffer.alloc(12 * 1024 * 1024));
+  const largeDirSource = await openSource(largeDir);
+  const largeDirError = await largeDirSource.read('Big.fit').then(
+    () => null,
+    (err) => (err instanceof Error ? err.message : String(err)),
+  );
+  await largeDirSource.close();
+  check('folder: 12 MB activity file is rejected before it is read', largeDirError, (v) =>
+    v === 'Big.fit is 12 MB, which is larger than the 10 MB limit for activity files — a Strava export does not ship activity files that size.',
+  );
+
+  const gzBombZip = writeZip(
+    'zip-gz-bomb',
+    buildZip([
+      {
+        name: 'activities.csv',
+        data: Buffer.from(
+          [
+            csvHeader,
+            '1,"Oct 12, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+            '2,"Oct 11, 2026, 6:32:10 AM",Bomb,Løb,1800,1800,5.0,170,150,Bomb.gpx.gz',
+          ].join('\n') + '\n',
+        ),
+      },
+      { name: 'activities/Good.gpx', data: gzFixture },
+      { name: 'activities/Bomb.gpx.gz', data: await gzipBomb(101 * 1024 * 1024) },
+    ]),
+  );
+  const rssFile = join(scratch('gz-bomb-rss'), 'maxrss');
+  const rssPreload = join(scratch('gz-bomb-preload'), 'maxrss.cjs');
+  writeFileSync(
+    rssPreload,
+    "const fs = require('node:fs');\n" +
+      "process.on('exit', () => fs.writeFileSync(process.env.STRAVA_DIGEST_MAX_RSS, String(process.resourceUsage().maxRSS)));\n",
+  );
+  let gzBombRun;
+  try {
+    gzBombRun = {
+      status: 0,
+      stdout: execFileSync(
+        process.execPath,
+        ['--require', rssPreload, cliPath, gzBombZip],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, STRAVA_DIGEST_MAX_RSS: rssFile },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+      stderr: '',
+    };
+  } catch (err) {
+    gzBombRun = {
+      status: err.status ?? null,
+      stdout: String(err.stdout ?? ''),
+      stderr: String(err.stderr ?? ''),
+    };
+  }
+  const gzBombLine =
+    gzBombRun.stdout.split('\n').find((line) => line.startsWith('d=') && line.includes('n="Bomb"')) ?? '';
+  check('gz bomb: the row fails with an honest message', gzBombLine, (v) =>
+    v.includes(
+      'err="activities/Bomb.gpx.gz unpacks to more than 10 MB — a Strava export does not ship activity files that size."',
+    ),
+  );
+  check('gz bomb: the rest of the digest is still built', gzBombRun.status, (v) => v === 0);
+  check('gz bomb: the other run keeps its analysis', gzBombRun.stdout, (v) =>
+    /^d=\S+ n="Good" km=5\.00 .*? err=/m.test(v) === false &&
+    /^d=\S+ n="Good" km=5\.00 /m.test(v),
+  );
+  const maxRssKb = Number(readFileSync(rssFile, 'utf8'));
+  if (Number.isFinite(maxRssKb) && maxRssKb > 0) {
+    console.log(`      gz-bomb max RSS: ${Math.round(maxRssKb / 1024)} MB`);
+    check('gz bomb: max RSS stays below 250 MB', maxRssKb, (v) => v < 250 * 1024);
+  } else {
+    console.log('skip: maxRSS not reported on this platform');
+  }
 } finally {
   rmSync(tmp, { recursive: true, force: true });
   if (enkeltRoot) rmSync(enkeltRoot, { recursive: true, force: true });

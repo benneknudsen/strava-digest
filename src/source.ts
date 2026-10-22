@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import yauzl from 'yauzl';
+import { limitForFileName, tooLargeError } from './limits.ts';
 
 /**
  * A read-only view over a Strava bulk export — either the ZIP as downloaded
@@ -11,6 +12,10 @@ export interface ExportSource {
   /** Every entry path in the source, '/'-separated. */
   list(): string[];
   read(path: string): Promise<Buffer>;
+  /** Declared size in bytes, without reading the content. */
+  size(path: string): Promise<number>;
+  /** Notes about entries that were skipped while opening the source. */
+  warnings(): string[];
   close(): Promise<void>;
 }
 
@@ -24,48 +29,143 @@ export async function openSource(path: string): Promise<ExportSource> {
 
 function openZip(path: string): Promise<ExportSource> {
   return new Promise((resolve, reject) => {
-    yauzl.open(path, { lazyEntries: true, autoClose: false }, (err, zf) => {
-      if (err || !zf) return reject(err ?? new Error(`could not open ${path}`));
-      const entries = new Map<string, yauzl.Entry>();
+    // decodeStrings: false stops yauzl from validating entry names itself: a
+    // single `../` entry would emit an error and kill the whole archive. We
+    // decode and validate the raw names below instead, so one bad entry is
+    // skipped while the rest of the export stays readable.
+    //
+    // validateEntrySizes: false is deliberate too. yauzl would reject a zip
+    // bomb at its declared size before our own byte counter sees the real
+    // size. We check the declared size up front and the actual bytes while
+    // streaming below.
+    yauzl.open(
+      path,
+      { lazyEntries: true, autoClose: false, decodeStrings: false, validateEntrySizes: false },
+      (err, zf) => {
+        if (err || !zf) return reject(err ?? new Error(`could not open ${path}`));
+        const entries = new Map<string, yauzl.Entry>();
+        let skipped = 0;
 
-      zf.on('error', reject);
-      zf.on('entry', (entry: yauzl.Entry) => {
-        const name = entry.fileName.replace(/\\/g, '/');
-        if (!name.endsWith('/')) entries.set(name, entry);
+        zf.on('error', reject);
+        zf.on('entry', (entry: yauzl.Entry) => {
+          const name = decodeEntryName(entry);
+          if (!isSafeRelativePath(name)) skipped++;
+          else if (!name.endsWith('/')) entries.set(name, entry);
+          zf.readEntry();
+        });
+        zf.on('end', () =>
+          resolve({
+            label: `${path} (zip, ${entries.size} files)`,
+            list: () => [...entries.keys()],
+            read: (name) => readZipEntry(zf, entries, name),
+            size: async (name) => {
+              const entry = entries.get(name);
+              if (!entry) throw new Error(`findes ikke i arkivet: ${name}`);
+              return entry.uncompressedSize;
+            },
+            warnings: () => skippedEntryWarnings(skipped),
+            close: async () => zf.close(),
+          }),
+        );
         zf.readEntry();
-      });
-      zf.on('end', () =>
-        resolve({
-          label: `${path} (zip, ${entries.size} files)`,
-          list: () => [...entries.keys()],
-          read: (name) => readZipEntry(zf, entries, name),
-          close: async () => zf.close(),
-        }),
-      );
-      zf.readEntry();
-    });
+      },
+    );
   });
 }
 
-function readZipEntry(
+/**
+ * Decode an entry name without yauzl's validation. The ZIP UTF-8 flag (bit
+ * 11) says the name is UTF-8; otherwise the spec says CP437. Its ASCII range
+ * is identical to latin1, and every filename in a Strava export is ASCII, so
+ * latin1 is a safe fallback here. A non-ASCII CP437 name may decode to the
+ * wrong characters, but we only match known filenames and never write an
+ * entry to disk.
+ */
+function decodeEntryName(entry: yauzl.Entry): string {
+  const isUtf8 = (entry.generalPurposeBitFlag & 0x800) !== 0;
+  return entry.fileNameRaw.toString(isUtf8 ? 'utf8' : 'latin1').replace(/\\/g, '/');
+}
+
+/**
+ * Only relative paths inside the archive are safe to expose. Backslashes are
+ * normalized to '/' before this check, so Windows drive paths and UNC paths
+ * are caught by the same rules as POSIX absolute paths.
+ */
+function isSafeRelativePath(name: string): boolean {
+  if (!name) return false;
+  if (name.startsWith('/')) return false;
+  if (/^[A-Za-z]:/.test(name)) return false;
+  if (name.split('/').includes('..')) return false;
+  return true;
+}
+
+function skippedEntryWarnings(count: number): string[] {
+  if (!count) return [];
+  const single = count === 1;
+  return [
+    `${count} ${single ? 'entry in the archive was' : 'entries in the archive were'} skipped because ` +
+      `${single ? 'its name is not a safe relative path' : 'their names are not safe relative paths'}.`,
+  ];
+}
+
+async function readZipEntry(
   zf: yauzl.ZipFile,
   entries: Map<string, yauzl.Entry>,
   name: string,
 ): Promise<Buffer> {
   const entry = entries.get(name);
-  if (!entry) return Promise.reject(new Error(`findes ikke i arkivet: ${name}`));
+  if (!entry) throw new Error(`findes ikke i arkivet: ${name}`);
+  const limit = limitForFileName(name);
+  if (entry.uncompressedSize > limit) throw tooLargeError(name, entry.uncompressedSize);
   return new Promise((resolve, reject) => {
     zf.openReadStream(entry, (err, stream) => {
       if (err || !stream) return reject(err ?? new Error(`could not read ${name}`));
       const chunks: Buffer[] = [];
-      stream.on('data', (c: Buffer) => chunks.push(c));
-      stream.on('error', reject);
-      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      let total = 0;
+      let settled = false;
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        stream.destroy();
+        reject(error);
+      };
+      stream.on('data', (chunk: Buffer) => {
+        if (settled) return;
+        total += chunk.length;
+        if (total > limit) {
+          fail(tooLargeError(name, total));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      stream.on('error', fail);
+      stream.on('end', () => {
+        if (settled) return;
+        settled = true;
+        if (total !== entry.uncompressedSize) {
+          reject(
+            new Error(
+              `${name} is truncated or its declared size is wrong (expected ${entry.uncompressedSize} bytes, got ${total}).`,
+            ),
+          );
+          return;
+        }
+        resolve(Buffer.concat(chunks, total));
+      });
     });
   });
 }
 
 /* ------------------------------------------------------------- directory */
+
+export async function readFileLimited(path: string, displayName = path): Promise<Buffer> {
+  const limit = limitForFileName(displayName);
+  const st = await stat(path);
+  if (st.size > limit) throw tooLargeError(displayName, st.size);
+  const data = await readFile(path);
+  if (data.length > limit) throw tooLargeError(displayName, data.length);
+  return data;
+}
 
 async function openDir(path: string): Promise<ExportSource> {
   const files: string[] = [];
@@ -80,7 +180,9 @@ async function openDir(path: string): Promise<ExportSource> {
   return {
     label: `${path} (folder, ${files.length} files)`,
     list: () => [...files],
-    read: (name) => readFile(join(path, name)),
+    read: (name) => readFileLimited(join(path, name), name),
+    size: async (name) => (await stat(join(path, name))).size,
+    warnings: () => [],
     close: async () => {},
   };
 }
