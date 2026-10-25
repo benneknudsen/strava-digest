@@ -1,4 +1,5 @@
 import type { Track, TrackPoint } from './activity.ts';
+import { pauseMask, pauseTotals } from './pauses.ts';
 import { zonePcts, zoneSeconds, type ZoneConfig } from './zones.ts';
 
 export interface Split {
@@ -37,12 +38,10 @@ export interface RunAnalysis {
   distanceDerived: boolean;
 }
 
-const PAUSE_MIN_SEC = 20;
-const PAUSE_MAX_M = 8;
-
 export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): RunAnalysis {
   const pts = track.points;
-  const stops = findPauses(pts);
+  const mask = pauseMask(pts);
+  const stops = pauseTotals(pts, mask);
 
   const first = pts[0];
   const last = pts[pts.length - 1];
@@ -63,14 +62,14 @@ export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): Run
 
   const hrs = pts.map((p) => p.hr).filter((h): h is number => h != null && h > 0);
   const cads = pts.map((p) => p.cad).filter((c): c is number => c != null && c > 0);
-  const splits = buildSplits(pts);
+  const splits = buildSplits(pts, mask);
 
   let zones: number[] | null = null;
   let zonePct: number[] | null = null;
   let zoneMaxHr: number | null = null;
   let zoneSource: 'flag' | 'fit' | 'export-observation' | null = null;
   if (zoneCfg) {
-    const buckets = zoneSeconds(pts, zoneCfg);
+    const buckets = zoneSeconds(pts, zoneCfg, mask);
     if (buckets.some((s) => s > 0)) {
       zones = buckets;
       zonePct = zonePcts(buckets);
@@ -105,7 +104,7 @@ export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): Run
 
 /* ------------------------------------------------------------- per-km splits */
 
-function buildSplits(pts: TrackPoint[]): Split[] {
+function buildSplits(pts: TrackPoint[], mask: boolean[]): Split[] {
   if (pts.length < 3) return [];
   const buckets = new Map<number, { time: number; dist: number; hr: number; hrTime: number; elev: number }>();
 
@@ -116,7 +115,7 @@ function buildSplits(pts: TrackPoint[]): Split[] {
     const dd = cur.distM - prev.distM;
     const dt = (cur.t.getTime() - prev.t.getTime()) / 1000;
     if (dd < 0 || dt <= 0) continue;
-    const dtEff = dd < PAUSE_MAX_M && dt > PAUSE_MIN_SEC ? 0 : dt;
+    const dtEff = mask[i] ? 0 : dt;
     const km = Math.floor(prev.distM / 1000);
     const b = buckets.get(km) ?? { time: 0, dist: 0, hr: 0, hrTime: 0, elev: 0 };
     b.time += dtEff;
@@ -195,22 +194,6 @@ function paceCv(splits: Split[]): number | null {
   const m = mean(paces)!;
   const variance = paces.reduce((s, p) => s + (p - m) ** 2, 0) / paces.length;
   return m > 0 ? (Math.sqrt(variance) / m) * 100 : null;
-}
-
-/* ---------------------------------------------------------------- pauses */
-
-function findPauses(pts: TrackPoint[]): { count: number; sec: number } {
-  let count = 0;
-  let sec = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const dt = (pts[i]!.t.getTime() - pts[i - 1]!.t.getTime()) / 1000;
-    const dd = (pts[i]!.distM ?? 0) - (pts[i - 1]!.distM ?? 0);
-    if (dt > PAUSE_MIN_SEC && dd < PAUSE_MAX_M) {
-      count++;
-      sec += dt;
-    }
-  }
-  return { count, sec };
 }
 
 function elevationGain(pts: TrackPoint[]): number {

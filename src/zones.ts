@@ -1,4 +1,5 @@
 import type { TrackPoint } from './activity.ts';
+import { pauseMask } from './pauses.ts';
 
 export interface ZoneConfig {
   maxHr: number;
@@ -65,19 +66,23 @@ export function zoneIndex(hr: number, boundaries: number[]): number {
 
 /**
  * Effektiv tid pr. zone (sekunder, fem buckets) med samme pause-regel som
- * splits: spring over når turen står stille (dd < 8 m og dt > 20 s), og når
- * optagelsen mangler (dt > 60 s). Kun punkter med puls tæller.
+ * splits: spring over når punktet ligger i en pause, og når optagelsen
+ * mangler (dt > 60 s). Kun punkter med puls tæller. Masken bør komme fra
+ * `analyseRun`, så sporet kun parses én gang.
  */
-export function zoneSeconds(points: TrackPoint[], cfg: ZoneConfig): number[] {
+export function zoneSeconds(
+  points: TrackPoint[],
+  cfg: ZoneConfig,
+  mask: boolean[] = pauseMask(points),
+): number[] {
   const buckets = [0, 0, 0, 0, 0];
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1]!;
     const cur = points[i]!;
     const dt = (cur.t.getTime() - prev.t.getTime()) / 1000;
     if (dt <= 0 || dt > 60) continue;
+    if (mask[i]) continue;
     if (cur.hr == null || cur.hr <= 0) continue;
-    const dd = prev.distM != null && cur.distM != null ? cur.distM - prev.distM : null;
-    if (dd != null && dd < 8 && dt > 20) continue;
     buckets[zoneIndex(cur.hr, cfg.boundaries)]! += dt;
   }
   return buckets;
