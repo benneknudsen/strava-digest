@@ -22,6 +22,7 @@ import {
   limitForFileName,
   tooLargeError,
 } from '../src/limits.ts';
+import { pauseMask, pauseTotals } from '../src/pauses.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
 import { normalizeType, parseActivities, RUN_TYPES } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
@@ -181,6 +182,202 @@ try {
   check('zoner i sekunder summer til effektiv tid', az.zones?.reduce((s, z) => s + z, 0) ?? null, (v) => v != null && v > 3000 && v < 3200);
   check('zoneSource fra flag', az.zoneSource, (v) => v === 'flag');
   check('zoneMaxHr fra flag', az.zoneMaxHr, (v) => v === 210);
+
+  // Pause-detektion på tæt samplet spor: 600 s løb, 300 s stående, 600 s løb
+  // med ét punkt pr. sekund. Den gamle regel (dt > 20 s) så ingen pause her.
+  const pausePoints = [];
+  for (let s = 0; s <= 600; s++) {
+    pausePoints.push({ t: new Date(s * 1000), distM: s * 3, hr: 150 });
+  }
+  for (let s = 601; s <= 900; s++) {
+    pausePoints.push({ t: new Date(s * 1000), distM: 1800, hr: 150 });
+  }
+  for (let s = 901; s <= 1500; s++) {
+    pausePoints.push({ t: new Date(s * 1000), distM: 1800 + (s - 900) * 3, hr: 150 });
+  }
+  const pauseTrack = {
+    points: pausePoints,
+    laps: [],
+    sport: 'running',
+    source: 'gpx',
+    distanceDerived: false,
+  };
+  const pauseFlags = pauseMask(pausePoints);
+  const pauseStops = pauseTotals(pausePoints);
+  const pauseAz = analyseRun(pauseTrack, resolveZoneConfig(200, undefined));
+  check('pause: masken dækker alle punkter', pauseFlags.length, (v) => v === pausePoints.length);
+  check('pause: første punkt er ikke i pause', pauseFlags[0], (v) => v === false);
+  check('pause: ét sammenhængende segment', pauseStops.count, (v) => v === 1);
+  check('pause: pausetid ~300 s', pauseStops.sec, (v) => v >= 295 && v <= 305);
+  check('pause: movingSec uden pausen', pauseAz.movingSec, (v) => v != null && v >= 1195 && v <= 1205);
+  check(
+    'pause: zonetid uden pausetid',
+    pauseAz.zones?.reduce((s, z) => s + z, 0) ?? null,
+    (v) => v != null && v >= 1195 && v <= 1205,
+  );
+  check(
+    'pause: 1. km pace er ikke oppustet',
+    pauseAz.splits[0]?.paceSecPerKm ?? null,
+    (v) => v != null && Math.abs(v - 333) <= 5,
+  );
+
+  // Strava skriver distance i hvert andet punkt. Et manglende felt er ikke
+  // bevægelse, så pausen skal stadig være ét sammenhængende segment.
+  const everyOtherPoints = [];
+  for (let s = 0; s <= 600; s++) {
+    everyOtherPoints.push({ t: new Date(s * 1000), distM: s % 2 === 0 ? s * 3 : null, hr: 150 });
+  }
+  for (let s = 601; s <= 900; s++) {
+    everyOtherPoints.push({ t: new Date(s * 1000), distM: s % 2 === 0 ? 1800 : null, hr: 150 });
+  }
+  for (let s = 901; s <= 1500; s++) {
+    everyOtherPoints.push({
+      t: new Date(s * 1000),
+      distM: s % 2 === 0 ? 1800 + (s - 900) * 3 : null,
+      hr: 150,
+    });
+  }
+  const everyOtherAz = analyseRun(
+    { points: everyOtherPoints, laps: [], sport: 'running', source: 'gpx', distanceDerived: false },
+    resolveZoneConfig(200, undefined),
+  );
+  const everyOtherStops = pauseTotals(everyOtherPoints);
+  check('pause: distance hvert andet punkt giver ét segment', everyOtherStops.count, (v) => v === 1);
+  check('pause: distance hvert andet punkt pausetid ~300 s', everyOtherStops.sec, (v) => v >= 295 && v <= 305);
+  check(
+    'pause: distance hvert andet punkt movingSec ~1200 s',
+    everyOtherAz.movingSec,
+    (v) => v != null && v >= 1195 && v <= 1205,
+  );
+
+  // Et langt null-hul midt i et løb er ingen pause, når der faktisk blev
+  // løbet i hullet: 30 null-punkter ved 3 m/s er 90 m fremdrift.
+  const runNullGapPoints = [];
+  for (let s = 0; s <= 200; s++) {
+    runNullGapPoints.push({
+      t: new Date(s * 1000),
+      distM: s >= 100 && s <= 129 ? null : s * 3,
+      hr: 150,
+    });
+  }
+  const runNullGapStops = pauseTotals(runNullGapPoints);
+  check('pause: 30 s null-hul midt i løb er ikke pause', runNullGapStops.count, (v) => v === 0);
+  check('pause: 30 s null-hul midt i løb giver nul pausetid', runNullGapStops.sec, (v) => v === 0);
+
+  // Et null-hul inde i en pause må ikke dele segmentet. Stående fra 60..120,
+  // null fra 90..100, med løb før og efter.
+  const pauseNullGapPoints = [];
+  for (let s = 0; s <= 59; s++) {
+    pauseNullGapPoints.push({ t: new Date(s * 1000), distM: s * 3, hr: 150 });
+  }
+  for (let s = 60; s <= 120; s++) {
+    pauseNullGapPoints.push({
+      t: new Date(s * 1000),
+      distM: s >= 90 && s <= 100 ? null : 180,
+      hr: 150,
+    });
+  }
+  for (let s = 121; s <= 180; s++) {
+    pauseNullGapPoints.push({ t: new Date(s * 1000), distM: 180 + (s - 120) * 3, hr: 150 });
+  }
+  const pauseNullGapStops = pauseTotals(pauseNullGapPoints);
+  check('pause: null-hul midt i pause giver ét segment', pauseNullGapStops.count, (v) => v === 1);
+  check('pause: null-hul midt i pause beholder varigheden', pauseNullGapStops.sec, (v) => v === 60);
+
+  // Et enkelt null midt i en pause må ikke bryde segmentet: den nuværende
+  // adfærd gav 2 segmenter og 58 s i stedet for 1 og 60 s.
+  const singleNullPoints = [];
+  for (let s = 0; s <= 30; s++) singleNullPoints.push({ t: new Date(s * 1000), distM: 0, hr: 150 });
+  singleNullPoints.push({ t: new Date(31_000), distM: null, hr: 150 });
+  for (let s = 32; s <= 60; s++) singleNullPoints.push({ t: new Date(s * 1000), distM: 0, hr: 150 });
+  const singleNullStops = pauseTotals(singleNullPoints);
+  check('pause: enkelt null i pause bryder ikke segmentet', singleNullStops.count, (v) => v === 1);
+  check('pause: enkelt null i pause tæller hele varigheden', singleNullStops.sec, (v) => v === 60);
+
+  // En enhed kan skrive samme sekund to gange. Dubletten er et neutralt step:
+  // den må hverken dele pausen eller lægge tid til.
+  const duplicatePoints = [];
+  for (let s = 0; s <= 30; s++) duplicatePoints.push({ t: new Date(s * 1000), distM: 0, hr: 150 });
+  duplicatePoints.push({ t: new Date(30_000), distM: 0, hr: 150 });
+  for (let s = 31; s <= 60; s++) duplicatePoints.push({ t: new Date(s * 1000), distM: 0, hr: 150 });
+  const duplicateStops = pauseTotals(duplicatePoints);
+  check('pause: dublet-tidsstempel bryder ikke segmentet', duplicateStops.count, (v) => v === 1);
+  check('pause: dublet-tidsstempel ændrer ikke varigheden', duplicateStops.sec, (v) => v === 60);
+
+  const duplicatePausePoints = [];
+  for (let s = 0; s <= 600; s++) {
+    duplicatePausePoints.push({ t: new Date(s * 1000), distM: s * 3, hr: 150 });
+  }
+  for (let s = 601; s <= 900; s++) {
+    duplicatePausePoints.push({ t: new Date(s * 1000), distM: 1800, hr: 150 });
+    if (s === 750) duplicatePausePoints.push({ t: new Date(750_000), distM: 1800, hr: 150 });
+  }
+  for (let s = 901; s <= 1500; s++) {
+    duplicatePausePoints.push({ t: new Date(s * 1000), distM: 1800 + (s - 900) * 3, hr: 150 });
+  }
+  const duplicatePauseAz = analyseRun({
+    points: duplicatePausePoints,
+    laps: [],
+    sport: 'running',
+    source: 'gpx',
+    distanceDerived: false,
+  });
+  check('pause: dublet i pause crasher ikke analysen', duplicatePauseAz.pauseCount, (v) => v === 1);
+  check(
+    'pause: dublet i pause ændrer ikke movingSec',
+    duplicatePauseAz.movingSec,
+    (v) => v != null && v >= 1195 && v <= 1205,
+  );
+
+  // Sparsomt hul uden fremdrift: den gamle regel tæller det fortsat.
+  const sparsePoints = [
+    { t: new Date(0), distM: 0, hr: 150 },
+    { t: new Date(25_000), distM: 0, hr: 150 },
+  ];
+  const sparseStops = pauseTotals(sparsePoints);
+  check('pause: sparsomt spor uden fremdrift tælles', sparseStops.count, (v) => v === 1);
+  check('pause: sparsomt spor beholder varigheden', sparseStops.sec, (v) => v === 25);
+
+  // Sparsomt hul med fremdrift: union-reglen kræver både dd < 8 m og en lav
+  // rate, så 11 m over 30 s er ikke en pause.
+  const sparseMovingStops = pauseTotals([
+    { t: new Date(0), distM: 0, hr: 150 },
+    { t: new Date(30_000), distM: 11, hr: 150 },
+  ]);
+  check('pause: sparsomt hul med fremdrift er ikke pause', sparseMovingStops.count, (v) => v === 0);
+
+  // Et optagelseshul skal isoleres fra naboer, der selv er lange nok til at
+  // tælle. 25 s stop + 100 s hul + 25 s stop = 3 segmenter og 150 s.
+  const isolatedGapPoints = [];
+  for (let s = 0; s <= 25; s++) isolatedGapPoints.push({ t: new Date(s * 1000), distM: 0, hr: 150 });
+  isolatedGapPoints.push({ t: new Date(125_000), distM: 0, hr: 150 });
+  for (let s = 126; s <= 150; s++) isolatedGapPoints.push({ t: new Date(s * 1000), distM: 0, hr: 150 });
+  const isolatedGapStops = pauseTotals(isolatedGapPoints);
+  check('pause: hul isoleres fra naboer på begge sider', isolatedGapStops.count, (v) => v === 3);
+  check('pause: isoleret hul beholder samlet varighed', isolatedGapStops.sec, (v) => v === 150);
+
+  const movingGapStops = pauseTotals([
+    { t: new Date(0), distM: 0, hr: 150 },
+    { t: new Date(120_000), distM: 20, hr: 150 },
+  ]);
+  check('pause: hul med fremdrift tælles ikke som pause', movingGapStops.count, (v) => v === 0);
+
+  // Intet distance i sporet: ingen gættede pauser og ingen crash.
+  const noDistPoints = Array.from({ length: 61 }, (_, s) => ({ t: new Date(s * 1000), hr: 150 }));
+  const noDistStops = pauseTotals(noDistPoints);
+  check('pause: uden distance er masken tom', pauseMask(noDistPoints).some((v) => v), (v) => v === false);
+  check('pause: uden distance er der ingen pauser', noDistStops.count, (v) => v === 0);
+  check('pause: uden distance er pausetiden nul', noDistStops.sec, (v) => v === 0);
+
+  // Negativ kontrol: jævnt 1 Hz-spor uden pause.
+  const smoothPoints = Array.from({ length: 601 }, (_, s) => ({
+    t: new Date(s * 1000),
+    distM: s * 3,
+    hr: 150,
+  }));
+  const smoothStops = pauseTotals(smoothPoints);
+  check('pause: jævnt spor giver ingen pauser', smoothStops.count, (v) => v === 0);
+  check('pause: jævnt spor giver nul pausetid', smoothStops.sec, (v) => v === 0);
 
   const tempoEntry = resolveActivityEntry(source, found.root, activities[1].filename);
   const tempoTrack = parseActivityBuffer(tempoEntry, await source.read(tempoEntry));

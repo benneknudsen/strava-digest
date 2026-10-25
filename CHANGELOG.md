@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Pause detection now works on densely sampled tracks (GPX/TCX and FIT at
+  1 Hz): a sustained stop is recognised from low progress per second instead
+  of requiring a single gap longer than 20 s. A missing distance field no
+  longer breaks a pause, which matters for Strava FIT files that write
+  distance only every other point. Paused time is kept out of the zone split,
+  so it no longer inflates training load.
+- Behaviour change for sparsely sampled tracks: a step must now satisfy both
+  `dd < 8 m` and `dd / dt < 0.4 m/s`. A 30 s gap with 11 m of progress is no
+  longer counted as a pause, as the old rule did.
+
 ## [1.0.3] — 2026-10-21
 
 ### Fixed
