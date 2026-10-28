@@ -133,7 +133,7 @@ try {
   const activities = parseActivities(table, map).activities;
   check('antal aktiviteter', activities.length, (v) => v === 4);
   check('antal løb', activities.filter((a) => a.isRun).length, (v) => v === 3);
-  check('nyeste først', activities[0].name, (v) => v === 'Lang tur');
+  check('newest first', activities[0].name, (v) => v === 'Long run');
 
   // GPX-vejen: lang tur, 10 km, stigende puls, faldende pace
   const gpxEntry = resolveActivityEntry(source, found.root, activities[0].filename);
@@ -1616,7 +1616,7 @@ try {
   const daCsv = parseCsv(
     [
       'Aktivitets-ID,Aktivitetsdato,Aktivitetsnavn,Aktivitetstype,Distance,Maks. puls,Gennemsnitlig puls,Relativ indsats,Samlet stigning,Udstyr,Aktivitetsudstyr,Filnavn',
-      '1001,"12. okt. 2026, 06.32",Lang tur,Løb,10.0,174,156,92,41,30723737.0,Nike Vomero Plus,Run-1001.gpx',
+      '1001,"12. okt. 2026, 06.32",Long run,Løb,10.0,174,156,92,41,30723737.0,Nike Vomero Plus,Run-1001.gpx',
     ].join('\n'),
   );
   const daMap = mapColumns(daCsv);

@@ -36,7 +36,7 @@ function simulatedRun({ startPace, endPace, startHr, endHr, km = 10, startOffset
 }
 
 function gpx({ pts, start }) {
-  const head = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="fixture"><trk><name>Syntetisk tur</name><type>running</type><trkseg>\n`;
+  const head = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="fixture"><trk><name>Synthetic run</name><type>running</type><trkseg>\n`;
   const body = pts
     .map((p) => {
       const time = new Date(start.getTime() + p.t * 1000).toISOString();
@@ -111,9 +111,9 @@ dir('media');
 writeFileSync(join(root, 'media/photo.jpg'), 'not-a-real-jpeg');
 
 const rows = [
-  row({ id: 1001, date: 'Oct 12, 2026, 6:32:10 AM', name: 'Lang tur', type: 'Run', elapsed: 3380, moving: 3360, distanceKm: 10.0, maxHr: 174, avgHr: 156, re: 92, elev: 41, cal: 690, cad: 84, gear: 'Nike Pegasus 41', filename: 'Run-1001.gpx' }),
-  row({ id: 1002, date: 'Oct 9, 2026, 6:05:00 AM', name: 'Tempo', type: 'Run', elapsed: 1600, moving: 1580, distanceKm: 6.0, maxHr: 181, avgHr: 168, re: 78, elev: 12, cal: 420, cad: 88, gear: 'Nike Vaporfly', filename: 'Run-1002.tcx' }),
-  row({ id: 1003, date: 'Oct 7, 2026, 7:15:00 AM', name: 'Rolig tur', type: 'Run', elapsed: 2760, moving: 2745, distanceKm: 8.0, maxHr: 145, avgHr: 137, re: 44, elev: 30, cal: 520, cad: 82, gear: 'Nike Pegasus 41', filename: 'Run-1003.gpx' }),
+  row({ id: 1001, date: 'Oct 12, 2026, 6:32:10 AM', name: 'Long run', type: 'Run', elapsed: 3380, moving: 3360, distanceKm: 10.0, maxHr: 174, avgHr: 156, re: 92, elev: 41, cal: 690, cad: 84, gear: 'Nike Pegasus 41', filename: 'Run-1001.gpx' }),
+  row({ id: 1002, date: 'Oct 9, 2026, 6:05:00 AM', name: 'Tempo run', type: 'Run', elapsed: 1600, moving: 1580, distanceKm: 6.0, maxHr: 181, avgHr: 168, re: 78, elev: 12, cal: 420, cad: 88, gear: 'Nike Vaporfly', filename: 'Run-1002.tcx' }),
+  row({ id: 1003, date: 'Oct 7, 2026, 7:15:00 AM', name: 'Easy run', type: 'Run', elapsed: 2760, moving: 2745, distanceKm: 8.0, maxHr: 145, avgHr: 137, re: 44, elev: 30, cal: 520, cad: 82, gear: 'Nike Pegasus 41', filename: 'Run-1003.gpx' }),
   row({ id: 1004, date: 'Oct 6, 2026, 5:40:00 PM', name: 'Cykeltur', type: 'Ride', elapsed: 3600, moving: 3500, distanceKm: 24.5, maxHr: 150, avgHr: 128, re: 60, elev: 120, cal: 600, cad: 90, gear: 'Cykel', filename: 'Ride-1004.fit.gz' }),
 ];
 // Ekstra løb uden sporfiler: metadata kommer fra CSV'en, analysen udelades
@@ -125,7 +125,7 @@ for (let i = 0; i < extraRuns; i++) {
     row({
       id: 2000 + i,
       date: new Date(Date.UTC(2024, 0, 1, 6, 0, 0) - i * 86_400_000).toISOString(),
-      name: `Syntetisk tur ${i + 1}`,
+      name: `Synthetic run ${i + 1}`,
       type: 'Run',
       elapsed: 3000,
       moving: 2980,
