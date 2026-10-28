@@ -2,7 +2,7 @@
 
 Turns a Strava bulk export into one compact training digest — splits, heart-rate
 drift, zones, training load, trends — so an agent can read a whole running
-history for ~14,000 tokens instead of ~22 MB of GPS data. **454× smaller**, on
+history for ~15,000 tokens instead of ~22 MB of GPS data. **424× smaller**, on
 a real 196-run export.
 
 ```bash
@@ -12,65 +12,88 @@ npm link        # gives you the global `strava-digest` command
 ```
 
 `npm install` also builds `dist/`, which is what the `strava-digest` command
-points at. Requires Node ≥ 22.18.
+points at.
 
-Not on npm yet — cloning takes about twenty seconds. If you would rather have
+**You need:** Node ≥ 22.18 and a terminal. No Strava login, no API key, no
+account anywhere.
+
+**About paths:** `~` in this README means your home folder — `/Users/you` on
+macOS, `/home/you` on Linux, `C:\Users\you` on Windows. It expands in any shell,
+so the commands below work unchanged on all three.
+
+Not on npm yet — cloning is quick. If you would rather have
 `npm install -g strava-digest`, say so in an issue.
 
 ## Get your export
 
-Strava: **Settings → My Account → Download or Delete Your Account**. Order it
-there; the download link appears on the same page when it is ready. Put the zip
-in `~/Downloads`.
+In Strava: **Settings → My Account → Download or Delete Your Account**. Order it
+there. When the export is ready the download button appears on that same page,
+and Strava also emails a link — prefer the page, because the emailed link is a
+redirect that can expire.
 
-> **`media/`** in a Strava export is a folder of photos and videos. It is part
-> of *the export*, not of your machine, and the tool skips it on purpose —
-> images are not training data.
+Save the zip wherever you like: the tool takes a path, so there is no required
+location. The examples below say `~/Downloads/export.zip` only because that is
+where browsers usually put a download.
+
+> **`media/`** inside the export is a folder of photos and videos from your
+> activities. It ships inside the zip — it is not a folder on your disk, and the
+> tool skips it on purpose: images are not training data.
 
 ## Use it
 
 ```bash
-strava-digest --find              # find the export: one path per line
-strava-digest <path>              # digest to stdout
-strava-digest <path> --format md  # human-readable Markdown
-strava-digest <path> --out f.txt  # digest to a file
+strava-digest --find                        # where are my exports? one path per line
+strava-digest ~/Downloads/export.zip        # digest to stdout
+strava-digest ~/Downloads/export.zip --format md   # human-readable Markdown
+strava-digest ~/Downloads/export.zip --out digest.txt
 ```
 
-Run with no arguments in a terminal and you get a numbered picker instead. It
-also reads a single activity file (`.fit`/`.gpx`/`.tcx`, gzipped or not) or a
-folder of them, if you have no bulk export.
+`--find` looks in the current folder, `~/Downloads` and `~/Desktop`, and prints
+every candidate it found, newest file first — one absolute path per line, so it
+can be piped or read by an agent. Handy when you no longer remember where the zip
+went. Run `strava-digest` with no arguments in a terminal and the same list
+appears as a numbered picker.
+
+It also reads a single activity file (`.fit`/`.gpx`/`.tcx`, gzipped or not) or a
+folder of them. Strava quarantines bulk-export re-requests for about a week, so
+per-activity downloads keep you going while you wait.
 
 ## Give it to your agent
 
 **1. Paste it.** Build the digest, open the file, paste it into the chat. Works
 with any agent anywhere.
 
-**2. Install a skill.** One command puts a ready-made skill in the agents that
-are actually on the machine:
+**2. Install a skill.** One command copies a ready-made skill into the agents it
+finds on your computer:
 
 ```bash
 strava-digest --install-skill
 ```
 
+It checks the usual skills folders for Hermes, Claude Code, Cursor, Codex, Cline
+and Aider, and writes only to the ones that are actually there. Example output —
+your list and your paths will differ, `~` here is *your* home folder, and a
+skill that is already present says `updated` instead of `installed`:
+
 ```
 strava-digest — skill installed
 
-  installed   Hermes  →  /Users/you/.hermes/skills/strava-digest/SKILL.md
-  installed   Claude Code  →  /Users/you/.claude/skills/strava-digest/SKILL.md
+  installed   Hermes  →  ~/.hermes/skills/strava-digest/SKILL.md
+  installed   Claude Code  →  ~/.claude/skills/strava-digest/SKILL.md
   not found   Cursor, Codex, Cline, Aider
 
 Restart the agent and ask it about your runs.
 E.g. "how was my week?" or "what was my longest run?"
 ```
 
-An existing skill is updated where it lives, so you never end up with two of
-the same name. If the file you have differs from the packaged skill, it is
-copied to `SKILL.md.bak` first — and to `SKILL.md.bak.2`, `SKILL.md.bak.3`, …
-if a backup of that name already exists. A backup is never overwritten, and
-the file that is about to be replaced is never thrown away. A file that only
-differs in the `version:` line or in line endings is recognised as an older
-copy of the same skill, so a plain upgrade leaves no backup behind. Point at
-one folder to override: `strava-digest --install-skill ~/.hermes/skills`.
+If a skill named `strava-digest` already exists, the tool finds it wherever that
+agent keeps it — including inside category subfolders — and updates it there, so
+you never end up with two skills of the same name. When the file on disk differs
+from the packaged one, it is copied to `SKILL.md.bak` before being replaced (a
+backup is never overwritten; the next one becomes `SKILL.md.bak.2`, and so on),
+and an old copy that only differs in its `version:` line or line endings is
+recognised as the tool's own and replaced without a backup. To target a folder
+yourself: `strava-digest --install-skill <skills-folder>`.
 
 **3. Let the repo be read.** `AGENTS.md` tells any agent working in the folder
 what the tool does and which rules apply. Claude Code, Codex, Cursor, Aider
@@ -82,13 +105,13 @@ private use, level 2 is better.
 Worth being precise about, because it is easy to misunderstand:
 
 ```
-SKILL.md (4 KB)       = instructions. Tells the agent to run the command.
+SKILL.md (5.7 KB)     = instructions. Tells the agent to run the command.
                         Loaded only when relevant. Holds no data.
 
 strava-digest <zip>   = the compression. Runs locally; the agent never opens
-                        the zip. 22 MB of raw data → ~14,000 tokens.
+                        the zip. 21.9 MB of raw data → ~15,000 tokens.
 
-The digest (49 kB)    = what the agent actually reads.
+The digest (53 kB)    = what the agent actually reads.
 ```
 
 The skill is not a replacement for the compression — it is the **binding**
@@ -96,27 +119,31 @@ between the agent and the compression.
 
 ## What the agent gets
 
+Real output, trimmed to two of the three runs and without the `generated=` /
+`source=` lines (the export is this repo's own synthetic fixture, so there is
+no personal data in it):
+
 ```
-# STRAVA DIGEST v2 (agent format)
-runs_in_export=196
-max_hr=199 source=flag
+# STRAVA DIGEST v2 (agent-format)
+runs_in_export=3
+max_hr=181 source=export-observation
 
 ## WEEKS (newest first)
-w=2026-W42 r=1 km=7.0 t=3076 load=48 hr=142
+w=2026-W42 r=1 km=10.0 t=3360 load=218 hr=156 without_analysis=0
+w=2026-W41 r=2 km=14.0 t=4325 load=259 hr=153 without_analysis=0
 
 ## WINDOW (last 28 days vs. the 28 days before)
-recent: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=442 z=0.0,0.0,52.0,42.0,6.0
-previous: n=0 km=0.0 t=0 pace=- hr=- load=- z=-
+recent: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=477 z=0.0,0.0,41.4,35.4,23.2 without_analysis=0
+previous: n=0 km=- t=- pace=- hr=- load=- z=- without_analysis=0
 
-## RUNS (196, newest first)
-d=2026-10-16T08:18:29.000Z n="Morning run" km=7.02 t=3076 pace=438.2 hr=142/159
-z=3.1,31.0,66.0,0.0,0.0 elev=120 drift=5.7 half=-1.0 cv=2.0 pause=0 load=48
-sp=1:421@127,2:435@141
+## RUNS (3, newest first)
+d=2026-10-12T06:32:10.000Z n="Long run" km=10.00 t=3360 pace=336.0 hr=156/174 z=0.0,0.0,11.1,67.9,21.0 elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=218 sp=1:329@144,2:327@145,…
+d=2026-10-09T06:05:00.000Z n="Tempo run" km=6.00 t=1580 pace=263.3 hr=168/181 z=0.0,0.0,0.0,31.4,68.6 elev=0 drift=3.9 half=-2.0 cv=0.4 pause=0 load=122 sp=1:262@160,2:261@161,…
 ```
 
 One machine-readable line per run, with every field. The `SCHEMA` section says
 what each field means and `SIGNALS` says what the thresholds mean, so the
-agent never has to guess that `drift=5.7` is a percentage. Decimals are always
+agent never has to guess that `drift=4.4` is a percentage. Decimals are always
 a dot, missing values are `-`, and the same file always gives the same digest.
 
 Beyond what the source has: per-km splits with pace and average heart rate,
@@ -127,7 +154,7 @@ totals (longest run, fastest average, biggest gap, overall zone split).
 
 ## What it saves
 
-Measured on a real 240-activity export (196 runs) with
+One real export (240 activities, 196 runs), measured with
 `node scripts/measure-compression.mjs <export.zip>`:
 
 ```
@@ -143,25 +170,26 @@ RAW
     XML (tcx/gpx)   18.3 MB  ≈ 5 341 344 tokens
 
 DIGEST
-  digest            49.4 kB  (50624 bytes)  ≈ 14 062 tokens  (196 runs)
+  digest            53.0 kB  (54234 bytes)  ≈ 15 065 tokens  (196 runs)
 
 SAVING
-  454× smaller  —  21.9 MB saved, 99.78 % of the raw size
-  454× fewer tokens than the whole export
-  380× fewer tokens than the XML a model can even read
+  424× smaller  —  21.9 MB saved, 99.76 % of the raw size
+  424× fewer tokens than the whole export
+  355× fewer tokens than the XML a model can even read
 ```
 
 The bytes are exact; the token counts are estimated at ~3.6 characters per
 token, which is close for both XML and the dense machine format.
 
-It takes **0.6 seconds** to read and digest that whole export — 242 activity
-files, 21.9 MB — and the output is deterministic: the same export always
-gives the same digest, byte for byte.
+Reading and digesting that whole export — 242 activity files, 21.9 MB — takes
+**0.6 seconds** (2026, Apple M4 Mac mini; it is I/O-bound, so a slower disk
+costs more than a slower CPU). The output is deterministic: the same export
+always gives the same digest, byte for byte.
 
 Two things worth noticing. First, `media/` — 6 MB of photos and videos — is
 never read at all. Second, 3.1 MB of the activity files are **binary FIT**,
 which no model can read at all; the tool parses them, which is the entire
-job. The honest comparison is therefore the 18.3 MB of XML: **380× fewer
+job. The honest comparison is therefore the 18.3 MB of XML: **355× fewer
 tokens**, and every number in the digest is one the model can actually
 reason about.
 
@@ -173,7 +201,7 @@ reason about.
 --all           include all activity types, not just runs
 --list          show only the index of activities
 --find          find possible exports and print them as paths (one per line)
---install-skill copy the agent skill to the agents found on this machine
+--install-skill copy the agent skill to the agents found on your computer
 --out FIL       write to a file instead of stdout
 --json          machine-readable JSON instead of the digest
 --format md     human-readable Markdown instead of the agent format
@@ -242,8 +270,10 @@ Nothing beyond the §6.6 quote above has been verified here: which other
 paragraphs of Strava's terms apply to the individual use, we do not know, and
 we do not guess. Read Strava's own terms if you are in doubt.
 
-Keep the export and `runs/` out of version control — the files contain GPS
-tracks and other personal data.
+Keep your export — and anything you unpack from it — out of version control: the
+files contain GPS tracks and other personal data. If you work in a checkout of
+this repo, `.gitignore` already covers that case (`context.md`, `runs/`, and the
+raw activity formats).
 
 ## Development
 
@@ -268,7 +298,7 @@ MIT — see [LICENSE](LICENSE).
 
 There are two, and they mean different things.
 
-**The package version** (`1.0.2`) is the tool: the commands, the flags, the
+**The package version** (`1.0.3`) is the tool: the commands, the flags, the
 exit codes. It follows semver, so 1.x will not break your command line.
 
 **The agent format version** (`STRAVA DIGEST v2`, in the first line of the
