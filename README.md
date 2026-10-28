@@ -14,45 +14,33 @@ npm link        # gives you the global `strava-digest` command
 `npm install` also builds `dist/`, which is what the `strava-digest` command
 points at.
 
-**You need:** Node ≥ 22.18 and a terminal. No Strava login, no API key, no
-account anywhere.
-
-**About paths:** `~` in this README means your home folder — `/Users/you` on
-macOS, `/home/you` on Linux, `C:\Users\you` on Windows. It expands in any shell,
-so the commands below work unchanged on all three.
+**You need:** Node ≥ 22.18 and a terminal. No Strava login, no API key. `~` below
+means your home folder — `/Users/you`, `/home/you` or `C:\Users\you`.
 
 Not on npm yet — cloning is quick. If you would rather have
 `npm install -g strava-digest`, say so in an issue.
 
 ## Get your export
 
-In Strava: **Settings → My Account → Download or Delete Your Account**. Order it
-there. When the export is ready the download button appears on that same page,
-and Strava also emails a link — prefer the page, because the emailed link is a
+Strava: **Settings → My Account → Download or Delete Your Account**. Order it
+there, and download from that page when it is ready — the link Strava emails is a
 redirect that can expire.
 
-Save the zip wherever you like: the tool takes a path, so there is no required
-location. The examples below say `~/Downloads/export.zip` only because that is
-where browsers usually put a download.
-
-> **`media/`** inside the export is a folder of photos and videos from your
-> activities. It ships inside the zip — it is not a folder on your disk, and the
-> tool skips it on purpose: images are not training data.
+> **`media/`** in the export is Strava's photos and videos. The tool never reads
+> it: images are not training data.
 
 ## Use it
 
 ```bash
-strava-digest --find                        # where are my exports? one path per line
-strava-digest ~/Downloads/export.zip        # digest to stdout
-strava-digest ~/Downloads/export.zip --format md   # human-readable Markdown
-strava-digest ~/Downloads/export.zip --out digest.txt
+strava-digest --find                        # every export found, one path per line
+strava-digest export.zip                    # digest to stdout
+strava-digest export.zip --format md        # human-readable Markdown
+strava-digest export.zip --out digest.txt
 ```
 
-`--find` looks in the current folder, `~/Downloads` and `~/Desktop`, and prints
-every candidate it found, newest file first — one absolute path per line, so it
-can be piped or read by an agent. Handy when you no longer remember where the zip
-went. Run `strava-digest` with no arguments in a terminal and the same list
-appears as a numbered picker.
+`--find` searches the current folder, `~/Downloads` and `~/Desktop`, so you never
+have to remember where the zip went. With no arguments in a terminal you get the
+same list as a numbered picker.
 
 It also reads a single activity file (`.fit`/`.gpx`/`.tcx`, gzipped or not) or a
 folder of them. Strava quarantines bulk-export re-requests for about a week, so
@@ -72,8 +60,8 @@ strava-digest --install-skill
 
 It checks the usual skills folders for Hermes, Claude Code, Cursor, Codex, Cline
 and Aider, and writes only to the ones that are actually there. Example output —
-your list and your paths will differ, `~` here is *your* home folder, and a
-skill that is already present says `updated` instead of `installed`:
+yours will list whichever agents you have, and `installed` becomes `updated` on
+a second run:
 
 ```
 strava-digest — skill installed
@@ -86,14 +74,9 @@ Restart the agent and ask it about your runs.
 E.g. "how was my week?" or "what was my longest run?"
 ```
 
-If a skill named `strava-digest` already exists, the tool finds it wherever that
-agent keeps it — including inside category subfolders — and updates it there, so
-you never end up with two skills of the same name. When the file on disk differs
-from the packaged one, it is copied to `SKILL.md.bak` before being replaced (a
-backup is never overwritten; the next one becomes `SKILL.md.bak.2`, and so on),
-and an old copy that only differs in its `version:` line or line endings is
-recognised as the tool's own and replaced without a backup. To target a folder
-yourself: `strava-digest --install-skill <skills-folder>`.
+A skill you already have is updated where the agent keeps it, so you never end up
+with two of the same name; a file that differs from the packaged one is backed up
+to `SKILL.md.bak` first. `--install-skill <folder>` targets a folder yourself.
 
 **3. Let the repo be read.** `AGENTS.md` tells any agent working in the folder
 what the tool does and which rules apply. Claude Code, Codex, Cursor, Aider
@@ -101,8 +84,6 @@ and OpenCode read it automatically. Useful if you develop on the tool; for
 private use, level 2 is better.
 
 ### The skill is not the data
-
-Worth being precise about, because it is easy to misunderstand:
 
 ```
 SKILL.md (5.7 KB)     = instructions. Tells the agent to run the command.
@@ -119,9 +100,7 @@ between the agent and the compression.
 
 ## What the agent gets
 
-Real output, trimmed to two of the three runs and without the `generated=` /
-`source=` lines (the export is this repo's own synthetic fixture, so there is
-no personal data in it):
+Real output from the repo's synthetic fixture (trimmed to two runs):
 
 ```
 # STRAVA DIGEST v2 (agent-format)
@@ -186,12 +165,10 @@ Reading and digesting that whole export — 242 activity files, 21.9 MB — take
 costs more than a slower CPU). The output is deterministic: the same export
 always gives the same digest, byte for byte.
 
-Two things worth noticing. First, `media/` — 6 MB of photos and videos — is
-never read at all. Second, 3.1 MB of the activity files are **binary FIT**,
-which no model can read at all; the tool parses them, which is the entire
-job. The honest comparison is therefore the 18.3 MB of XML: **355× fewer
-tokens**, and every number in the digest is one the model can actually
-reason about.
+Two things worth noticing: `media/` is never read at all, and 3.1 MB of the
+files are binary FIT, which no model can read — the tool parses them, which is
+the job. The honest comparison is therefore the 18.3 MB of XML: **355× fewer
+tokens**, and every number in the digest is one the model can reason about.
 
 ## Flags
 
