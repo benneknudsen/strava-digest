@@ -123,7 +123,8 @@ d=2026-10-09T06:05:00.000Z n="Tempo run" km=6.00 t=1580 pace=263.3 hr=168/181 z=
 One machine-readable line per run, with every field. The `SCHEMA` section says
 what each field means and `SIGNALS` says what the thresholds mean, so the
 agent never has to guess that `drift=4.4` is a percentage. Decimals are always
-a dot, missing values are `-`, and the same file always gives the same digest.
+a dot, missing values are `-`, and the same file gives the same digest apart
+from the `generated=` timestamp.
 
 Beyond what the source has: per-km splits with pace and average heart rate,
 pace-normalised aerobic decoupling, negative split, pace consistency, zone
@@ -162,8 +163,9 @@ per token, which is close for both XML and the dense machine format.
 
 Reading and digesting that whole export — 242 activity files, 21.9 MB — takes
 **0.6 seconds** (2026, Apple M4 Mac mini; it is I/O-bound, so a slower disk
-costs more than a slower CPU). The output is deterministic: the same export
-always gives the same digest, byte for byte.
+costs more than a slower CPU). The output is deterministic apart from the
+`generated=` timestamp line: the same export always gives the same digest, so
+week-over-week verdicts stay comparable.
 
 Two things worth noticing: `media/` is never read at all, and 3.1 MB of the
 files are binary FIT, which no model can read — the tool parses them, which is
