@@ -17,6 +17,11 @@ All notable changes to this project are documented here. The format follows
 - Behaviour change for sparsely sampled tracks: a step must now satisfy both
   `dd < 8 m` and `dd / dt < 0.4 m/s`. A 30 s gap with 11 m of progress is no
   longer counted as a pause, as the old rule did.
+- A loose activity file whose first timestamp lies more than 24 hours in the
+  future no longer moves the digest's comparison window. It is skipped and
+  reported with the impossible date, the way the export's own date parser
+  already rejects such a row — a rejected file is a counted note, never a
+  clamped or invented date.
 
 ## [1.0.3] — 2026-10-21
 
