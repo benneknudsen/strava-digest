@@ -1085,6 +1085,54 @@ try {
   const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
   check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zones: no'));
 
+  /* ---- issue #32: en loose-fil med en umulig dato må ikke flytte ankeret ---- */
+
+  const anchorXml = (times) =>
+    `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>Fremtid</name><type>running</type><trkseg>${times
+      .map(
+        (t, i) =>
+          `<trkpt lat="55.676${i}" lon="12.5683"><ele>20</ele><time>${t}</time></trkpt>`,
+      )
+      .join('')}</trkseg></trk></gpx>\n`;
+  const futureXml = anchorXml(['2099-01-01T07:00:00Z', '2099-01-01T07:10:00Z']);
+
+  // Uden for `tmp`, så discovery-testene ikke ser to ekstra eksportmapper.
+  const anchorDir = mkdtempSync(join(tmpdir(), 'strava-digest-anker-'));
+  const anchorFutureDir = mkdtempSync(join(tmpdir(), 'strava-digest-anker-fremtid-'));
+  scratchDirs.push(anchorDir, anchorFutureDir);
+  for (const name of ['Run-1001.gpx', 'Run-1002.tcx', 'Run-1003.gpx']) {
+    copyFileSync(join(looseDir, name), join(anchorDir, name));
+    copyFileSync(join(looseDir, name), join(anchorFutureDir, name));
+  }
+  writeFileSync(join(anchorFutureDir, 'Fremtid2099.gpx'), futureXml);
+
+  const anchorBase = execFileSync('node', ['src/cli.ts', anchorDir], { encoding: 'utf8' });
+  const anchorFuture = execFileSync('node', ['src/cli.ts', anchorFutureDir], { encoding: 'utf8' });
+  const section = (text, from, to) => {
+    const start = text.indexOf(from);
+    const end = to ? text.indexOf(to, start) : -1;
+    return start < 0 ? '' : text.slice(start, end < 0 ? undefined : end);
+  };
+
+  check('issue 32: 2099-filen tælles ikke med i runs_in_export', anchorFuture, (v) =>
+    /^runs_in_export=3$/m.test(v),
+  );
+  check('issue 32: 2099-filen rapporteres sprunget over med datoen i grunden', anchorFuture, (v) =>
+    v.includes('Fremtid2099.gpx (date in the future (2099-01-01))'),
+  );
+  check('issue 32: WINDOW-blokken er identisk med og uden 2099-filen', section(anchorFuture, '## WINDOW', '## RUNS'), (v) =>
+    v !== '' && v === section(anchorBase, '## WINDOW', '## RUNS'),
+  );
+  check('issue 32: RUNS-blokken er identisk med og uden 2099-filen', section(anchorFuture, '## RUNS', '## STATS'), (v) =>
+    v !== '' && v === section(anchorBase, '## RUNS', '## STATS'),
+  );
+  check('issue 32: nyeste d= i RUNS er den nyeste gyldige tur', section(anchorFuture, '## RUNS', '## STATS'), (v) =>
+    /^d=2026-10-12T06:30:00\.330Z n="Run-1001"/m.test(v),
+  );
+  check('issue 32: WINDOW tæller kun de gyldige løb', section(anchorFuture, '## WINDOW', '## RUNS'), (v) =>
+    /^recent: n=3 /m.test(v),
+  );
+
   /* ---- fund 1: distance 0 fra fil uden distance må ikke påstå 0 km ---- */
 
   const noDistTrack = {

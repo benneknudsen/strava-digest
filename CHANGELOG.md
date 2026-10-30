@@ -23,6 +23,11 @@ All notable changes to this project are documented here. The format follows
   that the bytes are exact was therefore not true. It now reports UTF-8 byte
   counts, and the README measurement block is regenerated from the fixed
   script.
+- A loose activity file whose first timestamp lies more than 24 hours in the
+  future no longer moves the digest's comparison window. It is skipped and
+  reported with the impossible date, the way the export's own date parser
+  already rejects such a row — a rejected file is a counted note, never a
+  clamped or invented date.
 
 ## [1.0.3] — 2026-10-21
 

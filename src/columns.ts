@@ -420,7 +420,20 @@ function isRealDate(year: number, monthIndex: number, day: number): boolean {
 export function parseDate(v: string): Date | null {
   const d = parseDateUnchecked(v);
   if (!d) return null;
-  return d.getTime() > Date.now() + 24 * 60 * 60 * 1000 ? null : d;
+  return isPlausibleDate(d) ? d : null;
+}
+
+/** Hvor langt ud i fremtiden en dato må ligge, før den afvises. */
+const MAX_FUTURE_SKEW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * true når datoen er en rigtig dato, der ikke ligger mere end et døgn ude i
+ * fremtiden. Reglen bor kun her: et pas kan ikke starte i morgen, og en dårlig
+ * CSV-række eller et dårligt trackpunkt må ikke flytte digestens anker.
+ */
+export function isPlausibleDate(d: Date | null | undefined): boolean {
+  if (!d || Number.isNaN(d.getTime())) return false;
+  return d.getTime() <= Date.now() + MAX_FUTURE_SKEW_MS;
 }
 
 function parseDateUnchecked(v: string): Date | null {

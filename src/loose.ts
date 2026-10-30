@@ -1,7 +1,8 @@
 import { readdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { Track } from './activity.ts';
+import type { Track, TrackPoint } from './activity.ts';
 import type { RunAnalysis } from './analysis.ts';
+import { isPlausibleDate } from './columns.ts';
 import { activityFormatOf } from './limits.ts';
 import { RUN_TYPES, type ActivityRow } from './strava.ts';
 
@@ -46,6 +47,13 @@ export async function collectActivityFiles(path: string): Promise<string[]> {
 export const MIN_TRACK_POINTS = 2;
 
 /**
+ * Første punkt med en gyldig `Date`-tid. `undefined` når intet punkt har tid.
+ */
+export function firstValidPoint(track: Track): TrackPoint | undefined {
+  return track.points.find((p) => p.t instanceof Date && !Number.isNaN(p.t.getTime()));
+}
+
+/**
  * Byg en digest-række ud fra filen alene. Returnerer `null` når filen ikke har
  * et eneste punkt med gyldig tid, eller når den har for få punkter til at være
  * et pas — kaldstedet springer den så over med en note.
@@ -56,8 +64,8 @@ export function rowFromTrack(
   analysis: RunAnalysis | null,
 ): ActivityRow | null {
   if (track.points.length < MIN_TRACK_POINTS) return null;
-  const first = track.points.find((p) => p.t instanceof Date && !Number.isNaN(p.t.getTime()));
-  if (!first) return null;
+  const first = firstValidPoint(track);
+  if (!first || !isPlausibleDate(first.t)) return null;
   const last = track.points[track.points.length - 1]!;
   const filename = basename(filePath);
   // En fil uden distance-felter efterlader `last.distM` som undefined — 0 ville

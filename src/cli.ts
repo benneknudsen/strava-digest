@@ -4,14 +4,14 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { parseActivityBuffer, type Track } from './activity.ts';
 import { analyseRun } from './analysis.ts';
-import { mapColumns } from './columns.ts';
+import { isPlausibleDate, mapColumns } from './columns.ts';
 import { parseCsv } from './csv.ts';
 import { renderMarkdown, type DigestInput, type DigestedRun } from './digest.ts';
 import { renderAgent } from './agent.ts';
 import { discoverSources, pickSource, searchDirs, type Candidate } from './interactive.ts';
 import { installSkill, renderInstall } from './install.ts';
 import { activityFormatOf, limitForFileName, tooLargeError } from './limits.ts';
-import { collectActivityFiles, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
+import { collectActivityFiles, firstValidPoint, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
 import { type ExportSource, findActivitiesCsv, openSource, readFileLimited, resolveActivityEntry } from './source.ts';
 import { type ActivityRow, type ActivityStats, parseActivities } from './strava.ts';
 import { resolveZoneConfig } from './zones.ts';
@@ -376,10 +376,18 @@ interface LooseEntry {
 const LOOSE_HOST_NOTE =
   'Uden activities.csv findes eksportens navn ikke — navnet i digesten kommer fra filnavnet. Relative Effort, udstyr og kalorier er udeladt.';
 
-/** Filer der ikke kan blive et pas: for få punkter eller ingen brugbar tid. */
+/**
+ * Filer der ikke kan blive et pas: for få punkter, et første tidsstempel der er
+ * uindtruffet (over 24 timer i fremtiden), eller ingen brugbar tid.
+ */
 function skipReason(track: Track): string {
   const n = track.points.length;
-  return n > 0 && n < MIN_TRACK_POINTS ? `only ${n} point${n === 1 ? '' : 's'}` : 'no usable time';
+  if (n > 0 && n < MIN_TRACK_POINTS) return `only ${n} point${n === 1 ? '' : 's'}`;
+  const first = firstValidPoint(track);
+  if (first && !isPlausibleDate(first.t)) {
+    return `date in the future (${first.t.toISOString().slice(0, 10)})`;
+  }
+  return 'no usable time';
 }
 
 async function runLoose(
