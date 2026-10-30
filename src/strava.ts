@@ -26,6 +26,15 @@ export interface ActivityRow {
   isRun: boolean;
 }
 
+/**
+ * Typer der betyder løb. Vandre- og hike-ord er bevidst udeladt: tysk "Wanderung",
+ * hollandsk "Wandeling" og fransk "randonnée" er aktiviteter, ikke løb, og
+ * må ikke forvrænge run-count eller pace. Listen er ikke en udtømmende
+ * blokliste over vandre-ord. "passeio" og "loop" bliver, fordi deres
+ * betydning er reelt tvetydig i kildesproget (portugisisk gåtur, hollandsk
+ * løb). Tilføj ikke "spaziergang", "vandring", "paseo" eller "caminata"
+ * for at "rette" listen.
+ */
 export const RUN_TYPES = [
   'run',
   'running',
@@ -39,7 +48,6 @@ export const RUN_TYPES = [
   // German
   'lauf',
   'laufg',
-  'wanderung',
   // Swedish / Norwegian
   'lopning',
   'lopping',
@@ -48,12 +56,10 @@ export const RUN_TYPES = [
   // Dutch
   'hardlopen',
   'loop',
-  'wandeling',
   // French
   'course',
   'course a pied',
   'course pied',
-  'randonnee',
   // Spanish / Italian / Portuguese
   'carrera',
   'corsa',
