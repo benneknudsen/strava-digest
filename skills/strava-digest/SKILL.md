@@ -1,7 +1,7 @@
 ---
 name: strava-digest
 description: "Use when the user asks about their runs or training data."
-version: 1.0.3
+version: 1.0.4
 license: MIT
 ---
 

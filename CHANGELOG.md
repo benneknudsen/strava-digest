@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-10-30
+
 ### Changed
 
 - Removed code that was never read: an unused helper, an unread column count,
@@ -49,6 +51,40 @@ All notable changes to this project are documented here. The format follows
   reported with the impossible date, the way the export's own date parser
   already rejects such a row — a rejected file is a counted note, never a
   clamped or invented date.
+- Documentation: the README claimed the digest was byte-identical between
+  runs, which the `generated=` timestamp line makes untrue. Both places now
+  say the output is deterministic apart from that line, so the claim matches
+  the tool.
+- `--format` no longer fails silently: an unknown value is rejected in both
+  `--format json` and `--format=json`, and an unknown flag is reported instead
+  of being ignored. A missing `--context` file now warns on stderr instead of
+  producing a context-free digest without a word.
+- The activity format is decided by the last file suffix, so
+  `tur.fitness.gpx` is parsed as GPX instead of being mistaken for a FIT file.
+  A duration written as `1 t 30 min` or `1 h 30 s` is read correctly, and a
+  value with letters that matches no pattern is reported as missing rather
+  than scraped into a made-up number.
+- Loose activity files fold the activity type the same way the export does,
+  so a Swedish `Löpning` is counted as a run instead of disappearing. GPX
+  points are read whichever order `lat` and `lon` appear in, and a `file:///C:/…`
+  path pasted on Windows is no longer turned into an unreadable path.
+- `--out` is written atomically through a temp file and a rename, and an
+  existing target keeps its permissions. `--install-skill` refuses to run with
+  an empty or relative home directory instead of writing relative paths, the
+  launcher passes a signal's exit code through (`SIGINT` gives 130), and a pace
+  delta no longer prints `−0:60/km`.
+- The agent format's `hr=` falls back to the track file's heart rate when
+  the export's heart-rate columns are empty, and the weekly mean uses the same
+  rule so it cannot contradict the run lines it sums. The note about unmapped
+  export columns no longer claims they are all weather and gear: it says how
+  many populated columns the tool could not place, and that some may be
+  training data.
+- Reading a FIT file or resolving an archive entry no longer scales
+  quadratically, and `Math.max`/`Math.min` over a whole array is gone, so a
+  large export cannot abort the run with a stack overflow. `formatMb` rounds
+  to one decimal instead of always rounding up, and the 'too large' message
+  reports the declared size when it is known and 'more than the limit' when it
+  is not.
 
 ## [1.0.3] — 2026-10-21
 

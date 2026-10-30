@@ -280,9 +280,9 @@ export function mapColumns(table: CsvTable): ColumnMap {
 
   // Strava's export has 50+ optional columns, and almost all of them are
   // empty for almost every activity. Listing them all is noise: the point
-  // of the note is to say what the tool chose not to use, and an empty
-  // column carries no information worth an agent's tokens. So only the
-  // columns that actually hold a value are reported.
+  // of the note is to say which columns the tool could not place, and an
+  // empty column carries no information worth an agent's tokens. So only
+  // the columns that actually hold a value are reported.
   const unmatchedIdx = table.headers
     .map((_, i) => i)
     .filter((i) => !used.has(i))

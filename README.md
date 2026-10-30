@@ -278,7 +278,7 @@ MIT — see [LICENSE](LICENSE).
 
 There are two, and they mean different things.
 
-**The package version** (`1.0.3`) is the tool: the commands, the flags, the
+**The package version** (`1.0.4`) is the tool: the commands, the flags, the
 exit codes. It follows semver, so 1.x will not break your command line.
 
 **The agent format version** (`STRAVA DIGEST v2`, in the first line of the
