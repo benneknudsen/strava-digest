@@ -534,18 +534,44 @@ function parseArgs(argv: string[]): Args {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    const next = () => argv[++i] ?? '';
-    if (a === '--last') args.last = Number(next()) || 0;
-    else if (a === '--detail') args.detail = Number(next()) || args.detail;
-    else if (a === '--out') args.out = next();
-    else if (a === '--context') args.context = next();
-    else if (a === '--days') args.baselineDays = Number(next()) || args.baselineDays;
-    else if (a === '--max-hr') args.maxHr = parseMaxHr(next());
-    else if (a === '--json') args.json = true;
-    else if (a === '--list') args.list = true;
-    else if (a === '--all') args.all = true;
-    else if (a === '--format') args.format = next().trim() === 'md' ? 'md' : 'agent';
-    else if (!a.startsWith('-') && !args.input) args.input = a;
+    // `--flag=value` is the same as `--flag value`; an unknown flag must fail
+    // loudly instead of being skipped. Only double-dash flags are checked, so a
+    // path argument behaves exactly as before.
+    const eq = a.startsWith('--') ? a.indexOf('=') : -1;
+    const flag = eq >= 0 ? a.slice(0, eq) : a;
+    const inline = eq >= 0 ? a.slice(eq + 1) : undefined;
+    const next = (): string => {
+      const value = inline ?? argv[++i];
+      // Both `--flag value` and `--flag=value` must validate the value the
+      // same way: empty or another flag means the value is missing.
+      if (value === undefined || value.startsWith('--') || value.trim() === '') {
+        throw new Error(`missing value for ${flag}`);
+      }
+      return value;
+    };
+    const noValue = () => {
+      if (inline !== undefined) throw new Error(`flag ${flag} does not take a value`);
+    };
+    if (flag === '--last') args.last = Number(next()) || 0;
+    else if (flag === '--detail') args.detail = Number(next()) || args.detail;
+    else if (flag === '--out') args.out = next();
+    else if (flag === '--context') args.context = next();
+    else if (flag === '--days') args.baselineDays = Number(next()) || args.baselineDays;
+    else if (flag === '--max-hr') args.maxHr = parseMaxHr(next());
+    else if (flag === '--json') { noValue(); args.json = true; }
+    else if (flag === '--list') { noValue(); args.list = true; }
+    else if (flag === '--all') { noValue(); args.all = true; }
+    else if (flag === '--format') {
+      const value = next().trim();
+      if (value !== 'md' && value !== 'agent') {
+        throw new Error(
+          `invalid --format: "${value}" — use "md" for Markdown; the machine format is the default (use --json for JSON output)`,
+        );
+      }
+      args.format = value;
+    }
+    else if (flag.startsWith('--')) throw new Error(`unknown flag: ${flag}`);
+    else if (!flag.startsWith('-') && !args.input) args.input = flag;
   }
   if (!args.input) throw new Error('missing path to an export (zip, folder or activity file)');
   return args;

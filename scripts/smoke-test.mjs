@@ -9,12 +9,12 @@ import { fileURLToPath } from 'node:url';
 import { crc32, createDeflateRaw, createGzip, gzipSync } from 'node:zlib';
 import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
-import { mapColumns, num, parseDate } from '../src/columns.ts';
+import { durationSec, mapColumns, num, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
 import { utf8Bytes } from './bytes.mjs';
 import { renderMarkdown, fmtDuration, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
-import { discoverSources } from '../src/interactive.ts';
+import { cleanPath, discoverSources } from '../src/interactive.ts';
 import { collectActivityFiles, isActivityFile, rowFromTrack } from '../src/loose.ts';
 import {
   ACTIVITY_FILE_LIMIT_BYTES,
@@ -451,6 +451,79 @@ try {
   check('--format md giver menneske-Markdown', cliMd.includes('# Training digest'), (v) => v === true);
   check('--format md viser Zoner-linje', cliMd.includes('- **Zones:** Z1 '), (v) => v === true);
   check('--format md viser baseline-roligt', cliMd.includes('easy (Z1–Z2)'), (v) => v === true);
+
+  // issue #21 punkt 1: --format må kun acceptere de to kendte værdier.
+  let badFormatErr = null;
+  try {
+    execFileSync('node', ['src/cli.ts', tmp, '--format', 'json'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    badFormatErr = err;
+  }
+  check('--format json fejler', badFormatErr !== null, (v) => v === true);
+  check('--format json bruger exit-kode 1', badFormatErr?.status ?? null, (v) => v === 1);
+  check('--format json nævner md, standardformatet og --json', String(badFormatErr?.stderr ?? ''), (v) =>
+    v.includes('md') && v.includes('default') && v.includes('--json'),
+  );
+
+  // issue #21 repair: --flag=value must mean the same as --flag value, and an
+  // unknown flag or a value flag without a value must fail loudly.
+  const cliFailure = (args) => {
+    try {
+      execFileSync('node', ['src/cli.ts', ...args], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return null;
+    } catch (err) {
+      return err;
+    }
+  };
+  const badFormatEqualsErr = cliFailure([tmp, '--format=json']);
+  check('--format=json fejler som --format json', {
+    status: badFormatEqualsErr?.status ?? null,
+    message: String(badFormatEqualsErr?.stderr ?? ''),
+  }, (v) => v.status === 1 && v.message === String(badFormatErr?.stderr ?? ''));
+  const cliMdEquals = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--format=md'], {
+    encoding: 'utf8',
+  });
+  check('--format=md giver menneske-Markdown', cliMdEquals.includes('# Training digest'), (v) => v === true);
+  for (const [flag, args, needle] of [
+    ['--al', [tmp, '--al'], '--al'],
+    ['--jason', [tmp, '--jason'], '--jason'],
+    ['--out=', [tmp, '--out='], '--out'],
+    ['--format uden værdi', [tmp, '--format'], '--format'],
+  ]) {
+    const err = cliFailure(args);
+    check(`${flag} afvises med flag-navnet`, {
+      status: err?.status ?? null,
+      stderr: String(err?.stderr ?? ''),
+    }, (v) => v.status === 1 && v.stderr.includes(needle));
+  }
+
+  // issue #21 repair 2: `--flag=value` and `--flag value` must validate the
+  // value identically, not only accept the same good values.
+  const valueFlags = ['--last', '--detail', '--out', '--context', '--days', '--max-hr', '--format'];
+  for (const flag of valueFlags) {
+    for (const [label, bad] of [['starter med --', '--'], ['tom', '']]) {
+      const equals = cliFailure([tmp, `${flag}=${bad}`]);
+      const space = cliFailure([tmp, flag, bad]);
+      check(`${flag}= <${label}> og ${flag} <${label}> giver samme svar`, {
+        equals: { status: equals?.status ?? null, stderr: String(equals?.stderr ?? '') },
+        space: { status: space?.status ?? null, stderr: String(space?.stderr ?? '') },
+      }, (v) =>
+        v.equals.status === v.space.status &&
+        v.equals.stderr === v.space.stderr &&
+        v.equals.status === 1 &&
+        v.equals.stderr.includes(flag)
+      );
+    }
+  }
+
+  const cliAgent = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--format', 'agent'], { encoding: 'utf8' });
+  check('--format agent giver agent-format', cliAgent.includes('# STRAVA DIGEST v2 (agent-format)'), (v) => v === true);
 
   const cliJson = JSON.parse(
     execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--json'], { encoding: 'utf8' }),
@@ -1083,6 +1156,28 @@ try {
   const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
   check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zones: no'));
 
+  // issue #21 punkt 7: løse filer skal normalisere typen som bulk-vejen.
+  const looseTypeDir = mkdtempSync(join(tmpdir(), 'strava-digest-loose-types-'));
+  scratchDirs.push(looseTypeDir);
+  const typedXml = (type, day) =>
+    `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>${type}</name><type>${type}</type><trkseg>` +
+    [0, 1].map((i) =>
+      `<trkpt lat="55.676${i}" lon="12.5683"><ele>20</ele><time>2026-10-${day}T07:0${i}:00Z</time></trkpt>`,
+    ).join('') +
+    `</trkseg></trk></gpx>\n`;
+  writeFileSync(join(looseTypeDir, 'Svensk.gpx'), typedXml('Löpning', '03'));
+  writeFileSync(join(looseTypeDir, 'Cykel.gpx'), typedXml('Cykling', '02'));
+  let looseTypeJson = null;
+  try {
+    looseTypeJson = JSON.parse(execFileSync('node', ['src/cli.ts', looseTypeDir, '--json'], { encoding: 'utf8' }));
+  } catch {
+    looseTypeJson = null;
+  }
+  check('loose type: Löpning tælles som løb i digesten', looseTypeJson?.runs?.length ?? null, (v) => v === 1);
+  check('loose type: Löpning har isRun=true', looseTypeJson?.runs?.[0]?.row?.isRun ?? null, (v) => v === true);
+  const looseTypeAll = JSON.parse(execFileSync('node', ['src/cli.ts', looseTypeDir, '--all', '--json'], { encoding: 'utf8' }));
+  check('loose type: Cykling er stadig ikke et løb', looseTypeAll.runs.find((r) => r.row.name === 'Cykel')?.row?.isRun ?? null, (v) => v === false);
+
   /* ---- issue #32: en loose-fil med en umulig dato må ikke flytte ankeret ---- */
 
   const anchorXml = (times) =>
@@ -1206,23 +1301,23 @@ try {
   check('isActivityFile: .tcx', isActivityFile('a.tcx'), (v) => v === true);
   check('isActivityFile: .csv er ikke aktivitet', isActivityFile('activities.csv'), (v) => v === false);
   check('isActivityFile: .jpg er ikke aktivitet', isActivityFile('media/photo.jpg'), (v) => v === false);
-  check('isActivityFile: mid-name .fit følger parseren', isActivityFile('Tur.fit.bak'), (v) => v === true);
+  check('isActivityFile: mid-name .fit er ikke en aktivitet', isActivityFile('Tur.fit.bak'), (v) => v === false);
   check('isActivityFile: .gpx.bak er ikke aktivitet', isActivityFile('Tur.gpx.bak'), (v) => v === false);
 
   const fitBakDir = scratch('fit-bak');
   copyFileSync(join(repoRoot, 'fixtures', 'sample.fit'), join(fitBakDir, 'Tur.fit.bak'));
   copyFileSync(join(repoRoot, 'fixtures', 'sample.fit'), join(fitBakDir, 'Tur2.fit'));
   const fitBakFiles = await collectActivityFiles(fitBakDir);
-  check('loose: mid-name .fit samles som i bulk-stien', fitBakFiles.length, (v) => v === 2);
-  check('loose: både Tur.fit.bak og Tur2.fit samles', {
+  check('loose: kun den rigtige .fit-endelse samles', fitBakFiles.length, (v) => v === 1);
+  check('loose: Tur.fit.bak samles ikke, Tur2.fit gør', {
     bak: fitBakFiles.some((f) => f.endsWith('Tur.fit.bak')),
     plain: fitBakFiles.some((f) => f.endsWith('Tur2.fit')),
-  }, (v) => v.bak === true && v.plain === true);
+  }, (v) => v.bak === false && v.plain === true);
   const fitBakCandidates = await discoverSources([fitBakDir]);
-  check('discover: mid-name .fit tælles som aktivitetsfil', fitBakCandidates.find((c) => c.path === fitBakDir)?.count ?? null, (v) => v === 2);
+  check('discover: mid-name .fit tælles ikke som aktivitetsfil', fitBakCandidates.find((c) => c.path === fitBakDir)?.count ?? null, (v) => v === 1);
   const fitBakList = execFileSync('node', ['src/cli.ts', fitBakDir, '--list'], { encoding: 'utf8' });
-  check('loose --list: begge mid-name-filer er aktiviteter', fitBakList, (v) =>
-    v.includes('Tur.fit.bak') && v.includes('Tur2.fit'),
+  check('loose --list: kun Tur2.fit er en aktivitet', fitBakList, (v) =>
+    !v.includes('Tur.fit.bak') && v.includes('Tur2.fit'),
   );
 
   utimesSync(looseDir, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
@@ -1251,6 +1346,11 @@ try {
   const nested = await discoverSources([nestedBase]);
   check('discover: rekursivt indhold tælles fortsat med', nested.find((c) => c.path === join(nestedBase, 'ydre'))?.count ?? null, (v) => v === 1);
   check('discover: rodmappen tæller også rekursivt', nested.find((c) => c.path === nestedBase)?.count ?? null, (v) => v === 1);
+
+  // issue #21 punkt 8: file:// fra Windows må ikke give en ledende skråstreg.
+  check('cleanPath: Windows file:///C:/x/y.zip', cleanPath('file:///C:/x/y.zip'), (v) => v === 'C:/x/y.zip');
+  check('cleanPath: POSIX file:///Users/x/y.zip', cleanPath('file:///Users/x/y.zip'), (v) => v === '/Users/x/y.zip');
+  check('cleanPath: ren sti er uændret', cleanPath('/Users/x/y.zip'), (v) => v === '/Users/x/y.zip');
 
   /* ---- regression: stdout gennem en pipe må ikke klippes af ---- */
 
@@ -1710,6 +1810,30 @@ try {
   ]) {
     numberRow[germanElevation] = input;
     check(`talformat ${input}`, num(numberRow, germanMap, 'elevationGain'), (v) => v === expected);
+  }
+
+  // issue #21 punkt 5: dansk tekstvarighed må ikke falde igennem til num(),
+  // som skraber cifrene og gør "1 t 30 min" til 130 sekunder.
+  const durationMap = mapColumns(parseCsv('Varighed\n'));
+  for (const [input, expected] of [
+    ['1 t 30 min', 5400],
+    ['1 t 30 min.', 5400],
+    ['45 min', 2700],
+    ['45 min.', 2700],
+    ['2101 s', 2101],
+    ['2101 sek', 2101],
+    ['1 h 30 m 15 s', 5415],
+    ['1 h 30 s', 3630],
+    ['2 h 45 s', 7245],
+    ['1 time 5 sekunder', 3605],
+    ['30 s', 30],
+    ['1h30', 5400],
+    ['2101.0', 2101],
+    ['abc', null],
+    ['abc123', null],
+    ['2 t', 7200],
+  ]) {
+    check(`varighed ${input}`, durationSec([input], durationMap, 'elapsedSec'), (v) => v === expected);
   }
 
   // 3) Stravas FIT-filer har hvert felt i sin egen beseg: distance, puls
@@ -2497,6 +2621,13 @@ try {
       return null;
     }
   };
+  // A single path argument must still work unchanged after flag parsing was
+  // made strict.
+  const pathOnlyRun = runZipCli([writeZip('zip-path-only', fixtureZip)]);
+  check('zip: export.zip som eneste argument virker uændret', pathOnlyRun.status, (v) => v === 0);
+  check('zip: export.zip som eneste argument giver agent-format', pathOnlyRun.stdout, (v) =>
+    v.includes('# STRAVA DIGEST v2 (agent-format)'),
+  );
   const skippedNote = (n) =>
     n === 1
       ? '1 entry in the archive was skipped because its name is not a safe relative path.'
@@ -2738,14 +2869,84 @@ try {
     /^d=\S+ n="Good" km=5\.00 /m.test(v),
   );
 
+  // issue #21 punkt 3: formatet afgøres af den sidste filendelse.
+  check('format: tur.fitness.gpx er GPX', activityFormatOf('tur.fitness.gpx'), (v) => v === 'gpx');
+  const safeTrack = (name, buf) => {
+    try {
+      return parseActivityBuffer(name, buf);
+    } catch {
+      return null;
+    }
+  };
+  const fitnessTrack = safeTrack('tur.fitness.gpx', gzFixture);
+  check('format: tur.fitness.gpx parses som GPX med punkter', {
+    source: fitnessTrack?.source ?? null,
+    points: fitnessTrack?.points.length ?? null,
+  }, (v) => v.source === 'gpx' && v.points > 0);
+  check('format: tur.fit er FIT', activityFormatOf('tur.fit'), (v) => v === 'fit');
+  check('format: tur.fit.gz er FIT', activityFormatOf('tur.fit.gz'), (v) => v === 'fit');
+  check('format: tur.fit parses som FIT', safeTrack('tur.fit', fitBuffer)?.points.length ?? null, (v) => v === 14);
+  check('format: tur.fit.gz parses som FIT', safeTrack('tur.fit.gz', gzipSync(fitBuffer))?.points.length ?? null, (v) => v === 14);
+  check('format: Big.fit.csv er ikke FIT', activityFormatOf('Big.fit.csv'), (v) => v === null);
+  check('format: Big.fit.csv giver unknown activity format', thrownMessage(() => parseActivityBuffer('Big.fit.csv', fitBuffer)), (v) =>
+    v === 'unknown activity format: Big.fit.csv',
+  );
+
+  // issue #21 punkt 6: lat/lon-rækkefølgen i <trkpt> må være ligegyldig.
+  const latFirstXml = gzFixture.toString('utf8');
+  const lonFirstXml = latFirstXml.replace(
+    /<trkpt lat="([^"]+)" lon="([^"]+)"/g,
+    '<trkpt lon="$2" lat="$1"',
+  );
+  const latFirstTrack = parseActivityBuffer('LatFirst.gpx', Buffer.from(latFirstXml));
+  const lonFirstTrack = parseActivityBuffer('LonFirst.gpx', Buffer.from(lonFirstXml));
+  check('GPX: lon før lat giver samme punkter', {
+    n: lonFirstTrack.points.length,
+    first: lonFirstTrack.points[0]?.t.getTime(),
+    last: lonFirstTrack.points[lonFirstTrack.points.length - 1]?.t.getTime(),
+    dist: lonFirstTrack.points[lonFirstTrack.points.length - 1]?.distM,
+  }, (v) =>
+    v.n === latFirstTrack.points.length &&
+    v.n > 0 &&
+    v.first === latFirstTrack.points[0]?.t.getTime() &&
+    v.last === latFirstTrack.points[latFirstTrack.points.length - 1]?.t.getTime() &&
+    v.dist === latFirstTrack.points[latFirstTrack.points.length - 1]?.distM,
+  );
+
+  // issue #21 repair: `data-lat`/`data-lon` must not be read as `lat`/`lon`.
+  // `\b` also matches at `-`, so the old extractor picked the wrong attribute.
+  const dataAttrXml = `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>DataLat</name><type>running</type><trkseg><trkpt data-lat="99" lat="56.1" data-lon="99" lon="10.1"><ele>20</ele><time>2026-10-11T07:00:00Z</time></trkpt></trkseg></trk></gpx>\n`;
+  const dataAttrTrack = parseActivityBuffer('DataLat.gpx', Buffer.from(dataAttrXml));
+  check('GPX: data-lat/data-lon skygges ikke over lat/lon', {
+    n: dataAttrTrack.points.length,
+    lat: dataAttrTrack.points[0]?.lat ?? null,
+    lon: dataAttrTrack.points[0]?.lon ?? null,
+  }, (v) => v.n === 1 && v.lat === 56.1 && v.lon === 10.1);
+  const dataOnlyXml = `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>DataOnly</name><type>running</type><trkseg><trkpt data-lat="99" data-lon="99"><ele>20</ele><time>2026-10-11T07:00:00Z</time></trkpt></trkseg></trk></gpx>\n`;
+  check('GPX: kun data-lat/data-lon giver ingen punkter', safeTrack('DataOnly.gpx', Buffer.from(dataOnlyXml))?.points.length ?? null, (v) => v === 0);
+
   // The limit and the parser must answer "is this an activity file?" the same
-  // way. These names are FIT-parsed today because `.fit` appears anywhere in
-  // the name, so the 10 MB limit must cover them too.
-  const bypassNames = ['Big.fit.bak', 'Big.fit (1).gz', 'Big.FIT.GZ', 'Big.fit.gz.bak'];
-  for (const name of bypassNames) {
-    check(`format: ${name} is FIT`, activityFormatOf(name), (v) => v === 'fit');
-    check(`limit: ${name} gets the activity limit`, limitForFileName(name), (v) =>
+  // way. Only the last suffix decides, so a mid-name `.fit` is not an activity
+  // file and falls through to the other-files rule.
+  // Expected values are pinned per name. A weakened suffix rule (`includes`
+  // instead of the last suffix) makes Big.fit.bak and Big.fit (1).gz FIT, so
+  // these assertions fail. Big.FIT.GZ pins case folding plus the `.gz` suffix.
+  const bypassNames = [
+    { name: 'Big.fit.bak', format: null },
+    { name: 'Big.fit (1).gz', format: null },
+    { name: 'Big.FIT.GZ', format: 'fit' },
+    { name: 'Big.fit.gz.bak', format: null },
+  ];
+  for (const { name, format } of bypassNames) {
+    const kind = format === 'fit' ? 'activity files' : 'other files';
+    check(`format: ${name} follows its last suffix`, activityFormatOf(name), (v) =>
+      v === format,
+    );
+    check(`limit: ${name} follows its format`, limitForFileName(name), (v) =>
       v === ACTIVITY_FILE_LIMIT_BYTES,
+    );
+    check(`error: ${name} names the ${kind} limit`, tooLargeError(name, hugeFitBytes).message, (v) =>
+      v.includes(`10 MB limit for ${kind}`),
     );
   }
   check('format: a plain .fit is FIT', activityFormatOf('Good.fit'), (v) => v === 'fit');
@@ -2758,19 +2959,23 @@ try {
   check('limit: an unknown file gets the low limit', limitForFileName('media/photo.jpg'), (v) =>
     v === ACTIVITY_FILE_LIMIT_BYTES,
   );
-  // A file that parses as FIT must also get the FIT limit. If the parser keeps
-  // `includes('.fit')` while the limit goes back to the suffix regex, this
-  // fails before the 98 MB integration run can OOM.
+  // The parser and the limit must agree that a mid-name `.fit` is unknown.
   check('parser and limit agree on a mid-name .fit', {
-    source: parseActivityBuffer('Good.fit.bak', fitBuffer).source,
+    format: activityFormatOf('Good.fit.bak'),
     limit: limitForFileName('Good.fit.bak'),
-  }, (v) => v.source === 'fit' && v.limit === ACTIVITY_FILE_LIMIT_BYTES);
+    parse: thrownMessage(() => parseActivityBuffer('Good.fit.bak', fitBuffer)),
+  }, (v) =>
+    v.format === null &&
+    v.limit === ACTIVITY_FILE_LIMIT_BYTES &&
+    v.parse === 'unknown activity format: Good.fit.bak',
+  );
 
-  // The parser wins over the suffix: `Big.fit.csv` is parsed as FIT, so the
-  // 10 MB activity limit must cover it even though the name ends in .csv.
-  check('format: Big.fit.csv is FIT', activityFormatOf('Big.fit.csv'), (v) => v === 'fit');
-  check('limit: Big.fit.csv gets the activity limit', limitForFileName('Big.fit.csv'), (v) =>
-    v === ACTIVITY_FILE_LIMIT_BYTES,
+  // A `.csv` suffix is the real format. `Big.fit.csv` is not FIT, so no parser
+  // accepts it and the row fails before the read; its CSV suffix still gives it
+  // the 100 MB export limit.
+  check('format: Big.fit.csv is not FIT', activityFormatOf('Big.fit.csv'), (v) => v === null);
+  check('limit: Big.fit.csv keeps the export limit', limitForFileName('Big.fit.csv'), (v) =>
+    v === EXPORT_FILE_LIMIT_BYTES,
   );
   check('format: Big.gpx.csv is not GPX', activityFormatOf('Big.gpx.csv'), (v) => v === null);
   check('limit: Big.gpx.csv keeps the export limit', limitForFileName('Big.gpx.csv'), (v) =>
@@ -2783,8 +2988,8 @@ try {
   check('limit: Big.gpx.bak gets the low limit', limitForFileName('Big.gpx.bak'), (v) =>
     v === ACTIVITY_FILE_LIMIT_BYTES,
   );
-  check('error: Big.fit.csv names the activity limit', tooLargeError('Big.fit.csv', hugeFitBytes).message, (v) =>
-    v.includes('10 MB limit for activity files') && !v.includes('export files'),
+  check('error: Big.fit.csv names the export limit', tooLargeError('Big.fit.csv', hugeFitBytes).message, (v) =>
+    v.includes('100 MB limit for export files') && !v.includes('other files'),
   );
   check('error: Big.gpx.bak names the other-files limit', tooLargeError('Big.gpx.bak', hugeFitBytes).message, (v) =>
     v.includes('10 MB limit for other files') && !v.includes('export files'),
@@ -2793,7 +2998,9 @@ try {
     v.includes('100 MB limit for export files') && !v.includes('other files'),
   );
 
-  for (const name of bypassNames) {
+  for (const { name, format } of bypassNames) {
+    const isFit = format === 'fit';
+    const kind = isFit ? 'activity files' : 'other files';
     const bypassCsv = Buffer.from(
       [
         csvHeader,
@@ -2802,7 +3009,7 @@ try {
       ].join('\n') + '\n',
     );
     const bypassZip = writeZip(
-      `zip-bypass-${bypassNames.indexOf(name)}`,
+      `zip-bypass-${bypassNames.findIndex((entry) => entry.name === name)}`,
       buildZip([
         { name: 'activities.csv', data: bypassCsv },
         { name: 'activities/Good.gpx', data: gzFixture },
@@ -2819,7 +3026,7 @@ try {
     check(`zip: 98 MB ${name} does not kill the run`, bypassRun.status, (v) => v === 0);
     check(`zip: 98 MB ${name} becomes one row error`, bypassRun.stdout, (v) =>
       v.includes(
-        `err="activities/${name} is 98.7 MB, which is larger than the 10 MB limit for activity files — a Strava export does not ship activity files that size."`,
+        `err="activities/${name} is 98.7 MB, which is larger than the 10 MB limit for ${kind} — a Strava export does not ship ${isFit ? 'activity files' : 'files'} that size."`,
       ),
     );
     check(`zip: 98 MB ${name} still gives the rest of the digest`, bypassRun.stdout, (v) =>
@@ -2827,13 +3034,11 @@ try {
     );
   }
 
-  // A `.csv` suffix must not change which parser runs, and it must not make us
-  // read a file no parser can use. Big.fit.csv is FIT and gets the 10 MB
-  // activity limit. Big.gpx.csv and Big.tcx.csv stay export files by suffix,
-  // but no parser accepts them, so the row fails before the read — a 98 MB
-  // read would cost ~276 MB RSS for a row that can only produce an error.
-  // Big.gpx.bak is neither an activity nor a CSV, so its error names the
-  // "other files" limit it actually got.
+  // A `.csv` suffix is the real format, so `Big.fit.csv` is not FIT and no
+  // parser accepts it. The row fails before the read; its CSV suffix still
+  // gives it the 100 MB export limit. Big.gpx.csv and Big.tcx.csv behave the
+  // same way. Big.gpx.bak is neither an activity nor a CSV, so its error names
+  // the "other files" limit it actually got.
   const namedCsv = Buffer.from(
     [
       csvHeader,
@@ -2914,10 +3119,8 @@ try {
   const namedLine = (name) =>
     namedRun.stdout.split('\n').find((line) => line.startsWith('d=') && line.includes(`n="${name}"`)) ?? '';
   check('zip: Big.fit.csv does not kill the run', namedRun.status, (v) => v === 0);
-  check('zip: Big.fit.csv uses the activity limit', namedLine('FitCsv'), (v) =>
-    v.includes(
-      'err="activities/Big.fit.csv is 98.7 MB, which is larger than the 10 MB limit for activity files — a Strava export does not ship activity files that size."',
-    ),
+  check('zip: Big.fit.csv fails before it is read', namedLine('FitCsv'), (v) =>
+    v.includes('err="unknown activity format: activities/Big.fit.csv"'),
   );
   check('zip: Big.gpx.csv fails before it is read', namedLine('GpxCsv'), (v) =>
     v.includes('err="unknown activity format: activities/Big.gpx.csv"'),

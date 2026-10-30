@@ -9,16 +9,18 @@ export type ActivityFormat = 'fit' | 'gpx' | 'tcx';
  * Which parser the file needs, or null. This is the single answer to
  * "is this an activity file?" — both the size limit and the parser use it.
  *
- * A trailing `.gz` is a transport layer, not part of the format. `.fit`
- * counts anywhere in the name because the FIT parser has always accepted
- * that, so the 10 MB limit must cover those names too. `.gpx` and `.tcx`
- * only count as a suffix, exactly as before.
+ * A trailing `.gz` is a transport layer, not part of the format. The format
+ * comes from the last suffix after that, so `Tur.fit.gz` is FIT and
+ * `tur.fitness.gpx` is GPX. A name like `Big.fit.csv` is not FIT: its last
+ * suffix is `.csv`, and no parser accepts it.
  */
 export function activityFormatOf(name: string): ActivityFormat | null {
   const lower = name.trim().toLowerCase().replace(/\.gz$/, '');
-  if (lower.includes('.fit')) return 'fit';
-  if (lower.endsWith('.gpx')) return 'gpx';
-  if (lower.endsWith('.tcx')) return 'tcx';
+  const dot = lower.lastIndexOf('.');
+  const suffix = dot >= 0 ? lower.slice(dot) : '';
+  if (suffix === '.fit') return 'fit';
+  if (suffix === '.gpx') return 'gpx';
+  if (suffix === '.tcx') return 'tcx';
   return null;
 }
 
@@ -27,9 +29,8 @@ export function activityFormatOf(name: string): ActivityFormat | null {
  *
  * The limit must follow the parser that actually runs, not the filename
  * suffix. If `activityFormatOf` recognises an activity format, the activity
- * limit applies even when the name ends in `.csv` — `Big.fit.csv` is parsed
- * as FIT. Only names that no parser accepts can fall through to the CSV
- * rule. Everything else gets the low activity limit, so a new or forgotten
+ * limit applies. Only names that no parser accepts can fall through to the
+ * CSV rule. Everything else gets the low activity limit, so a new or forgotten
  * file type cannot inherit the high limit; its error says "other files"
  * because that is the limit it actually used.
  */
