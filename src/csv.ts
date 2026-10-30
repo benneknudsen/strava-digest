@@ -7,7 +7,6 @@
 export interface CsvTable {
   headers: string[];
   rows: string[][];
-  delimiter: string;
 }
 
 export function parseCsv(text: string): CsvTable {
@@ -15,7 +14,7 @@ export function parseCsv(text: string): CsvTable {
   const delimiter = sniffDelimiter(clean);
   const rows = parseRows(clean, delimiter);
   const headers = (rows.shift() ?? []).map((h) => h.trim());
-  return { headers, rows: rows.filter((r) => r.some((c) => c.trim() !== '')), delimiter };
+  return { headers, rows: rows.filter((r) => r.some((c) => c.trim() !== '')) };
 }
 
 function sniffDelimiter(text: string): string {

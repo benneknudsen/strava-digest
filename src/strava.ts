@@ -9,7 +9,6 @@ import {
 } from './columns.ts';
 
 export interface ActivityRow {
-  id: string;
   date: Date;
   name: string;
   type: string;
@@ -19,7 +18,12 @@ export interface ActivityRow {
   avgHr: number | null;
   maxHr: number | null;
   relativeEffort: number | null;
+  /** only in the CSV export; kept because the smoke tests read it */
   elevationGain: number | null;
+  /**
+   * Kept only because the smoke test reads it: the loose-file path checks that
+   * it is null. No test covers the CSV parse of this column.
+   */
   calories: number | null;
   gear: string;
   filename: string;
@@ -139,7 +143,7 @@ export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActiviti
     }
     const type = raw(row, map, 'type');
     activities.push({
-      id: raw(row, map, 'id'),
+      // Removing `ActivityRow.id` also drops the `id` key from `--json` output; deliberate per issue #20.
       date,
       name: raw(row, map, 'name') || '(uden navn)',
       type: type || '(ukendt)',

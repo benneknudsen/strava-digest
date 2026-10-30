@@ -1,6 +1,5 @@
 import type { RunAnalysis } from './analysis.ts';
-import type { ActivityRow } from './strava.ts';
-import { windowStats } from './strava.ts';
+import { type ActivityRow, windowStats } from './strava.ts';
 import { ZONE_NAMES, zonePcts } from './zones.ts';
 
 export interface DigestedRun {
@@ -237,12 +236,6 @@ function renderRun(run: DigestedRun, index: number, zoneHint?: string): string[]
     lines.push(`- _per-run details unavailable: ${run.error}_`);
   }
   return lines;
-}
-
-function paceFrom(row: ActivityRow): number | null {
-  const d = row.distanceM;
-  const t = row.movingSec ?? row.elapsedSec;
-  return d && t ? t / (d / 1000) : null;
 }
 
 /**
