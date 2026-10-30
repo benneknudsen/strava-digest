@@ -2,7 +2,7 @@
 
 Turns a Strava bulk export into one compact training digest — splits, heart-rate
 drift, zones, training load, trends — so an agent can read a whole running
-history for ~15,000 tokens instead of ~22 MB of GPS data. **424× smaller**, on
+history for ~15,000 tokens instead of ~22 MB of GPS data. **423× smaller**, on
 a real 196-run export.
 
 ```bash
@@ -149,16 +149,16 @@ RAW
     XML (tcx/gpx)   18.3 MB  ≈ 5 341 344 tokens
 
 DIGEST
-  digest            53.0 kB  (54234 bytes)  ≈ 15 065 tokens  (196 runs)
+  digest            53.1 kB  (54349 bytes)  ≈ 15 097 tokens  (196 runs)
 
 SAVING
-  424× smaller  —  21.9 MB saved, 99.76 % of the raw size
-  424× fewer tokens than the whole export
-  355× fewer tokens than the XML a model can even read
+  423× smaller  —  21.9 MB saved, 99.76 % of the raw size
+  423× fewer tokens than the whole export
+  354× fewer tokens than the XML a model can even read
 ```
 
-The bytes are exact; the token counts are estimated at ~3.6 characters per
-token, which is close for both XML and the dense machine format.
+The byte count is exact; the token count is an estimate at ~3.6 characters
+per token, which is close for both XML and the dense machine format.
 
 Reading and digesting that whole export — 242 activity files, 21.9 MB — takes
 **0.6 seconds** (2026, Apple M4 Mac mini; it is I/O-bound, so a slower disk
@@ -167,7 +167,7 @@ always gives the same digest, byte for byte.
 
 Two things worth noticing: `media/` is never read at all, and 3.1 MB of the
 files are binary FIT, which no model can read — the tool parses them, which is
-the job. The honest comparison is therefore the 18.3 MB of XML: **355× fewer
+the job. The honest comparison is therefore the 18.3 MB of XML: **354× fewer
 tokens**, and every number in the digest is one the model can reason about.
 
 ## Flags

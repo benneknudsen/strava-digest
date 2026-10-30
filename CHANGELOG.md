@@ -17,6 +17,12 @@ All notable changes to this project are documented here. The format follows
 - Behaviour change for sparsely sampled tracks: a step must now satisfy both
   `dd < 8 m` and `dd / dt < 0.4 m/s`. A 30 s gap with 11 m of progress is no
   longer counted as a pause, as the old rule did.
+- `scripts/measure-compression.mjs` reported JavaScript character counts as
+  bytes, so the digest size, the compression ratio, the "saved" figure and the
+  token estimate were all computed from the wrong number — and the README claim
+  that the bytes are exact was therefore not true. It now reports UTF-8 byte
+  counts, and the README measurement block is regenerated from the fixed
+  script.
 
 ## [1.0.3] — 2026-10-21
 
