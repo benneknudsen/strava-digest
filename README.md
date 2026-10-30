@@ -205,8 +205,9 @@ and the agent format is language-neutral (`km`, `t`, `pace`, `hr`, `z`,
 `drift`, `load`).
 
 A language that is not covered yet needs a couple of aliases in
-`src/columns.ts` — they are all in one table, and the tool prints the real
-header row when it cannot place a column, so a new alias is one line.
+`src/columns.ts` — they are all in one table. The default agent format says
+how many populated export columns it could not place; run with `--format md`
+to see up to 12 of their header names, so a new alias is one line.
 
 ## Notes on the data
 
