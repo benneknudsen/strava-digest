@@ -16,6 +16,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Walking and hiking activity types no longer count as runs. `Wanderung`
+  (German), `Wandeling` (Dutch) and `Randonnée` (French) were part of the
+  run vocabulary, so a walk entered the run count, the distance and the
+  pace baseline — an 8 km walk at walking pace could drag the reported
+  average pace far below the real one. They are still activities: they
+  appear in the export count, in `--list` and with `--all`; they are just
+  not runs.
 - Pause detection now works on densely sampled tracks (GPX/TCX and FIT at
   1 Hz): a sustained stop is recognised from low progress per second instead
   of requiring a single gap longer than 20 s. A missing distance field no

@@ -1391,6 +1391,80 @@ try {
   check('svensk type "Löp" tælles som løb', RUN_TYPES.includes(normalizeType('Löp')), (v) => v === true);
   check('cykeltur tælles ikke som løb', normalizeType('Virtuel cykeltur') === 'lob', (v) => v === false);
 
+  // Regression (issue #17): Wandern, wandelen og randonnée er ikke løb.
+  // De skal stadig være aktiviteter i eksporten, men de må ikke tælle i
+  // run-count, distance eller pace. Hver fixture har ét rigtigt løb, så
+  // løbets pace kan aflæses præcist.
+  const hikeWalkRows = [
+    '2,"Oct 8, 2026, 6:32:10 AM",Wanderung,Wanderung,1500,1500,8.0,120,100,Walk-Wanderung.gpx',
+    '3,"Oct 7, 2026, 6:32:10 AM",Wandeling,Wandeling,1500,1500,8.0,120,100,Walk-Wandeling.tcx',
+    '4,"Oct 6, 2026, 6:32:10 AM",Randonnée,Randonnée,1500,1500,8.0,120,100,Walk-Randonnee.gpx',
+  ];
+  const writeHikeExport = (name, runType) => {
+    const dir = writeExport(name, [
+      `1,"Oct 12, 2026, 6:32:10 AM",${runType},${runType},3600,3600,10.0,170,150,Good.gpx`,
+      ...hikeWalkRows,
+    ]);
+    copyGoodGpx(dir);
+    copyFileSync(join(tmp, 'activities', 'Run-1003.gpx'), join(dir, 'Walk-Wanderung.gpx'));
+    copyFileSync(join(tmp, 'activities', 'Run-1002.tcx'), join(dir, 'Walk-Wandeling.tcx'));
+    copyFileSync(join(tmp, 'activities', 'Run-1001.gpx'), join(dir, 'Walk-Randonnee.gpx'));
+    return dir;
+  };
+  const runsBlock = (out) => out.slice(out.indexOf('## RUNS'));
+
+  const hikeTypesDir = writeHikeExport('hike-types', 'Løb');
+  const hikeTypesAgent = execFileSync('node', ['src/cli.ts', hikeTypesDir], { encoding: 'utf8' });
+  const hikeTypesRuns = runsBlock(hikeTypesAgent);
+  check('hike types: runs_in_export counts only the real run', hikeTypesAgent, (v) =>
+    /^runs_in_export=1$/m.test(v),
+  );
+  check('hike types: Wanderung, Wandeling and Randonnée are not in RUNS', hikeTypesRuns, (v) =>
+    !v.includes('n="Wanderung"') &&
+    !v.includes('n="Wandeling"') &&
+    !v.includes('n="Randonnée"'),
+  );
+
+  const hikeTypesList = execFileSync('node', ['src/cli.ts', hikeTypesDir, '--list'], { encoding: 'utf8' });
+  check('hike types: --list still counts all four activities', hikeTypesList, (v) =>
+    /^4 activities in total \(shown: 4\)$/m.test(v),
+  );
+  check('hike types: --list still shows every walk as an activity', hikeTypesList, (v) =>
+    v.includes('Wanderung') && v.includes('Wandeling') && v.includes('Randonnée'),
+  );
+  check('hike types: --list does not mark a walk as RUN', hikeTypesList, (v) =>
+    !/RUN\s+Wanderung/.test(v) && !/RUN\s+Wandeling/.test(v) && !/RUN\s+Randonnée/.test(v),
+  );
+
+  const hikeTypesAll = execFileSync('node', ['src/cli.ts', hikeTypesDir, '--all'], { encoding: 'utf8' });
+  check('hike types: --all still shows every walk in RUNS', runsBlock(hikeTypesAll), (v) =>
+    v.includes('n="Wanderung"') && v.includes('n="Wandeling"') && v.includes('n="Randonnée"'),
+  );
+  check('hike types: every walk with a track is analysed under --all', runsBlock(hikeTypesAll), (v) => {
+    const lines = v.split('\n');
+    return ['Wanderung', 'Wandeling', 'Randonnée'].every((name) => {
+      const line = lines.find((candidate) => candidate.includes(`n="${name}"`)) ?? '';
+      return / z=\d/.test(line) && !line.includes(' z=- ') && !line.includes(' err=');
+    });
+  });
+  check('hike types: --all puts every activity in the run pool', hikeTypesAll, (v) =>
+    /^activities_in_export=4$/m.test(v) && /^runs_in_export=4$/m.test(v) && /^runs_shown=4$/m.test(v),
+  );
+  check('hike types: WINDOW pace comes from the real run alone', hikeTypesAgent, (v) =>
+    /^recent: n=1 km=10\.0 t=3600 pace=360\.0 /m.test(v),
+  );
+
+  for (const type of ['Run', 'Lauf', 'Löpning']) {
+    const dir = writeHikeExport(`hike-types-${type.toLowerCase().replace(/[^a-z]/g, '')}`, type);
+    const out = execFileSync('node', ['src/cli.ts', dir], { encoding: 'utf8' });
+    check(`hike types: normal "${type}" still counts as a run`, runsBlock(out), (v) =>
+      v.includes(`n="${type}"`),
+    );
+  }
+  check('Randonnée accent still folds during normalisation', normalizeType('Randonnée'), (v) =>
+    v === 'randonnee' && !RUN_TYPES.includes(v),
+  );
+
   // 2) Eksportens datoer er UTC — bekræftet mod FIT/GPX i samme arkiv.
   //    Som lokal tid kom turen to timer for tidigt i digesten.
   const utcDate = parseDate('16. okt. 2026, 08.18.29');
