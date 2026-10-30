@@ -19,6 +19,17 @@ export interface ExportSource {
   close(): Promise<void>;
 }
 
+const entryCache = new WeakMap<ExportSource, readonly string[]>();
+
+function entriesOf(source: ExportSource): readonly string[] {
+  let entries = entryCache.get(source);
+  if (!entries) {
+    entries = source.list();
+    entryCache.set(source, entries);
+  }
+  return entries;
+}
+
 export async function openSource(path: string): Promise<ExportSource> {
   const st = await stat(path);
   if (st.isDirectory()) return openDir(path);
@@ -192,8 +203,7 @@ async function openDir(path: string): Promise<ExportSource> {
  * flat, but some archives nest everything under a root folder.
  */
 export function findActivitiesCsv(source: ExportSource): { csv: string; root: string } | null {
-  const hits = source
-    .list()
+  const hits = entriesOf(source)
     .filter((p) => p.toLowerCase().endsWith('activities.csv'))
     .sort((a, b) => a.split('/').length - b.split('/').length);
   if (!hits.length) return null;
@@ -216,7 +226,7 @@ export function resolveActivityEntry(
     `activities/${clean}`,
     clean,
   ];
-  const all = source.list();
+  const all = entriesOf(source);
   for (const c of candidates) if (all.includes(c)) return c;
   // Last resort: match on basename (exports differ in folder layout).
   const base = clean.split('/').pop()!;

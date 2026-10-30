@@ -13,6 +13,12 @@ All notable changes to this project are documented here. The format follows
   parsed but never used. The digest output is unchanged — verified byte for
   byte on a real export — except that the `--json` output no longer carries
   the unused `id` key on each row.
+- Reading a FIT file and resolving an archive entry no longer scale
+  quadratically. The distance interpolation for points without a distance
+  measurement walks the known-distance indices once instead of rescanning
+  them per point, and the archive's entry list is built once per source
+  instead of once per activity row. The digest is unchanged — verified byte
+  for byte on a real export.
 
 ### Fixed
 

@@ -1730,6 +1730,94 @@ try {
   check('distance interpoleres mellem målinger', split[1]?.distM, (v) => v === 1000);
   check('sidste distance bevares', split[2]?.distM, (v) => v === 2000);
 
+  // Regression (issue #18): interpolation must stay bit-identical while the
+  // neighbour search becomes linear. Values are asserted exactly, not against
+  // another tree, because these numbers are the contract.
+  const gapRecords = [
+    { timestamp: '2026-10-16T08:00:00.000Z' },
+    { timestamp: '2026-10-16T08:00:10.000Z', distance: 0 },
+    { timestamp: '2026-10-16T08:00:20.000Z' },
+    { timestamp: '2026-10-16T08:00:30.000Z', distance: 100 },
+    { timestamp: '2026-10-16T08:00:40.000Z' },
+    { timestamp: '2026-10-16T08:00:50.000Z', distance: 300 },
+    { timestamp: '2026-10-16T08:01:00.000Z' },
+    { timestamp: '2026-10-16T08:01:10.000Z' },
+  ];
+  check(
+    'interpolation: leading/trailing gaps og midtpunkt er uændrede',
+    pointsFromFitRecords(gapRecords).map((p) => p.distM),
+    (v) => JSON.stringify(v) === JSON.stringify([0, 0, 50, 100, 200, 300, 300, 300]),
+  );
+  const singleKnown = pointsFromFitRecords([
+    { timestamp: '2026-10-16T09:00:00.000Z' },
+    { timestamp: '2026-10-16T09:00:10.000Z', distance: 42 },
+    { timestamp: '2026-10-16T09:00:20.000Z' },
+  ]);
+  check(
+    'interpolation: enkelt kendt distance klemmes til begge ender',
+    singleKnown.map((p) => p.distM),
+    (v) => JSON.stringify(v) === JSON.stringify([42, 42, 42]),
+  );
+  const lone = pointsFromFitRecords([{ timestamp: '2026-10-16T09:01:00.000Z' }]);
+  check('interpolation: punkt uden naboer på nogen side giver 0', lone[0]?.distM, (v) => v === 0);
+
+  const stepFixture = (count) => {
+    const base = Date.parse('2026-10-16T08:00:00.000Z');
+    const records = [];
+    for (let i = 0; i < count; i++) {
+      const record = { timestamp: new Date(base + i * 1000).toISOString() };
+      if (i % 2 === 0) record.distance = i * 10;
+      records.push(record);
+    }
+    return records;
+  };
+  const measureSteps = (count) => {
+    let steps = 0;
+    pointsFromFitRecords(stepFixture(count), {
+      onStep: () => {
+        steps++;
+      },
+    });
+    return steps;
+  };
+  const stepsN = measureSteps(4000);
+  const steps2N = measureSteps(8000);
+  check('interpolation: antal sammenligninger vokser lineært', { stepsN, steps2N }, (v) =>
+    v.stepsN > 0 && v.steps2N <= v.stepsN * 2.5,
+  );
+
+  // Regression (issue #18): resolveActivityEntry must not rebuild the entry
+  // list for every CSV row. This stub keeps the real source semantics.
+  const makeCountingSource = (entries) => ({
+    label: `stub (${entries.length} entries)`,
+    listCalls: 0,
+    list() {
+      this.listCalls += 1;
+      return [...entries];
+    },
+    read: async () => Buffer.alloc(0),
+    size: async () => 0,
+    warnings: () => [],
+    close: async () => {},
+  });
+  const stubEntries = ['export/activities.csv'];
+  for (let i = 0; i < 25; i++) stubEntries.push(`export/activities/Run-${i}.gpx`);
+  // Lower-precedence look-alikes for Run-0 so the order check below can fail
+  // if the precedence changes: root + activities/ must win over activities/
+  // (without root) and the bare path.
+  stubEntries.push('activities/Run-0.gpx', 'Run-0.gpx');
+  const stub = makeCountingSource(stubEntries);
+  const stubResolved = [];
+  for (let i = 0; i < 25; i++) stubResolved.push(resolveActivityEntry(stub, 'export/', `Run-${i}.gpx`));
+  check('resolution: root + activities/ vinder i rækkefølgen', stubResolved[0], (v) => v === 'export/activities/Run-0.gpx');
+  check('resolution: alle 25 rækker findes', stubResolved.every((v) => v != null), (v) => v === true);
+  check('resolution: 25 rækker kalder list() O(1) gange', stub.listCalls, (v) => v <= 2);
+  check(
+    'resolution: basename-fallback finder en nestet sti',
+    resolveActivityEntry(stub, 'export/', 'nested/Run-7.gpx'),
+    (v) => v === 'export/activities/Run-7.gpx',
+  );
+
   // 4) Dansk overskrift "Aktivitetsudstyr" (sko) må ikke forveksles med
   //    "Udstyr" (cykel-id) — ellers vises 30723737.0 som udstyr.
   const daCsv = parseCsv(
