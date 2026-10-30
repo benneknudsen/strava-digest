@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { parseActivityBuffer, type Track } from './activity.ts';
 import { analyseRun } from './analysis.ts';
@@ -25,6 +24,8 @@ interface Args {
   all: boolean;
   baselineDays: number;
   context: string;
+  /** true når brugeren selv gav --context; standardstien advarer ikke. */
+  contextExplicit: boolean;
   maxHr: number | null;
   /** antal løb der får fuld split-opdeling i agent-formatet */
   detail: number;
@@ -279,7 +280,7 @@ async function runBulk(
       )
     : [];
 
-  const contextText = await readContext(args.context);
+  const contextText = await readContext(args.context, args.contextExplicit);
   const usesObservedMaxHr = args.maxHr == null && observedMaxHr != null;
   const zoneSource: 'flag' | 'fit' | 'export-observation' | null =
     args.maxHr != null ? 'flag' : usesObservedMaxHr ? 'export-observation' : null;
@@ -469,7 +470,7 @@ async function runLoose(
     baselineRuns: usable.map((e) => e.run!),
     baselineDays: args.baselineDays,
     unmatchedHeaders: [] as string[],
-    contextText: await readContext(args.context),
+    contextText: await readContext(args.context, args.contextExplicit),
     generatedAt: new Date(),
     poolLabel: args.all ? 'Activities' : 'Runs',
     maxHr: args.maxHr ?? null,
@@ -507,7 +508,17 @@ async function emitDigest(
   if (args.out) {
     const target = resolve(args.out);
     await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, output, 'utf8');
+    const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      // rename erstatter inoden. En eksisterende fils mode skal derfor
+      // sættes på temp-filen først, ellers arver målet umask i stedet.
+      const previous = await stat(target).catch(() => null);
+      await writeFile(temp, output, previous ? { encoding: 'utf8', mode: previous.mode & 0o777 } : 'utf8');
+      await rename(temp, target);
+    } catch (err) {
+      await unlink(temp).catch(() => {});
+      throw err;
+    }
     console.error(`wrote ${target} (${Buffer.byteLength(output, 'utf8')} bytes)`);
   } else {
     process.stdout.write(output);
@@ -525,6 +536,7 @@ function parseArgs(argv: string[]): Args {
     all: false,
     baselineDays: 28,
     context: 'context.md',
+    contextExplicit: false,
     maxHr: null,
     // 0 = alle løb får splits. Prisen er lille: på 196 løb koster det
     // ~2.900 ekstra tokens, og splits med puls er det, en coach-agent
@@ -555,7 +567,12 @@ function parseArgs(argv: string[]): Args {
     if (flag === '--last') args.last = Number(next()) || 0;
     else if (flag === '--detail') args.detail = Number(next()) || args.detail;
     else if (flag === '--out') args.out = next();
-    else if (flag === '--context') args.context = next();
+    else if (flag === '--context') {
+      args.context = next();
+      // Kun en brugerangivet --context advarer hvis filen ikke kan læses;
+      // standardstien context.md må ikke støje for enhver kørsel (#22).
+      args.contextExplicit = true;
+    }
     else if (flag === '--days') args.baselineDays = Number(next()) || args.baselineDays;
     else if (flag === '--max-hr') args.maxHr = parseMaxHr(next());
     else if (flag === '--json') { noValue(); args.json = true; }
@@ -577,10 +594,13 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-async function readContext(path: string): Promise<string> {
+async function readContext(path: string, warn = false): Promise<string> {
   try {
     return await readFile(resolve(path), 'utf8');
   } catch {
+    if (warn) {
+      console.error(`strava-digest: cannot read the context file ${path}; continuing without it.`);
+    }
     return '';
   }
 }

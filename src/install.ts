@@ -7,18 +7,49 @@
  */
 import { copyFile, mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Hvor forskellige agenter læser skills fra. */
-const TARGETS: { name: string; dir: string; exists?: boolean }[] = [
-  { name: 'Hermes', dir: join(homedir(), '.hermes', 'skills', 'strava-digest') },
-  { name: 'Claude Code', dir: join(homedir(), '.claude', 'skills', 'strava-digest') },
-  { name: 'Cursor', dir: join(homedir(), '.cursor', 'skills', 'strava-digest') },
-  { name: 'Codex', dir: join(homedir(), '.codex', 'skills', 'strava-digest') },
-  { name: 'Cline', dir: join(homedir(), '.cline', 'skills', 'strava-digest') },
-  { name: 'Aider', dir: join(homedir(), '.aider', 'skills', 'strava-digest') },
-];
+/** Hvor forskellige agenter læser skills fra, relativt til hjemmemappen. */
+const TARGETS = [
+  { name: 'Hermes', parts: ['.hermes', 'skills', 'strava-digest'] },
+  { name: 'Claude Code', parts: ['.claude', 'skills', 'strava-digest'] },
+  { name: 'Cursor', parts: ['.cursor', 'skills', 'strava-digest'] },
+  { name: 'Codex', parts: ['.codex', 'skills', 'strava-digest'] },
+  { name: 'Cline', parts: ['.cline', 'skills', 'strava-digest'] },
+  { name: 'Aider', parts: ['.aider', 'skills', 'strava-digest'] },
+] as const;
+
+/**
+ * Er target inde i root? path.relative håndterer roden (`/`), Windows-drev
+ * og sammenligner stier som stier i stedet for som tekststrenge. Et tomt
+ * resultat betyder target === root, hvilket ikke er inde i mappen.
+ */
+export function isPathInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/**
+ * Byg de absolutte målmapper ud fra hjemmemappen. En tom eller relativ
+ * homedir() må ikke blive til relative mål, for så skriver installationen
+ * i forhold til cwd — og det er ikke brugerens hjemmemappe.
+ */
+export function resolveTargets(home: string = homedir()): { name: string; dir: string }[] {
+  if (!isAbsolute(home)) {
+    throw new Error(
+      `cannot install the skill: the home directory is ${home ? `"${home}"` : 'empty'}, but it must be an absolute path`,
+    );
+  }
+  const root = resolve(home);
+  return TARGETS.map(({ name, parts }) => {
+    const dir = join(root, ...parts);
+    if (!isPathInside(root, dir)) {
+      throw new Error(`cannot install the skill: ${dir} is outside the home directory ${root}`);
+    }
+    return { name, dir };
+  });
+}
 
 /** Find skill-filen i den installerede pakke. */
 export function skillSourcePath(): string {
@@ -151,7 +182,7 @@ export async function installSkill(
 
   const targets = targetDirs?.length
     ? targetDirs.map((d) => ({ name: d, dir: join(d, 'strava-digest') }))
-    : TARGETS;
+    : resolveTargets();
 
   const results: InstallResult[] = [];
   for (const t of targets) {
