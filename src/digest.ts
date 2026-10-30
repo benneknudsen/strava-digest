@@ -71,11 +71,11 @@ export function fmtDuration(sec: number | null | undefined): string {
 const fmtKm = (m: number | null | undefined): string =>
   m == null ? '–' : `${num(m / 1000, 2)} km`;
 
-const fmtDelta = (sec: number | null): string => {
+export const fmtDelta = (sec: number | null): string => {
   if (sec == null || !Number.isFinite(sec)) return '–';
   const sign = sec >= 0 ? '+' : '−';
-  const abs = Math.abs(sec);
-  return `${sign}${Math.floor(abs / 60)}:${String(Math.round(abs % 60)).padStart(2, '0')}/km`;
+  const total = Math.round(Math.abs(sec));
+  return `${sign}${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}/km`;
 };
 
 export function renderMarkdown(input: DigestInput): string {

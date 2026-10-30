@@ -1,18 +1,18 @@
 // Smoke-test: genererer syntetiske fixtures (ingen persondata), kører hele
 // pipelinen og fejler hvis nøgletallene ikke stemmer. Kør med `npm test`.
-import { execFileSync, spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { constants as osConstants, tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, createDeflateRaw, createGzip, gzipSync } from 'node:zlib';
 import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
 import { mapColumns, num, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
 import { utf8Bytes } from './bytes.mjs';
-import { renderMarkdown, fmtDuration, fmtPace } from '../src/digest.ts';
+import { renderMarkdown, fmtDelta, fmtDuration, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
 import { discoverSources } from '../src/interactive.ts';
 import { collectActivityFiles, isActivityFile, rowFromTrack } from '../src/loose.ts';
@@ -3037,6 +3037,165 @@ try {
     check('gz bomb: max RSS stays below 250 MB', maxRssKb, (v) => v < 250 * 1024);
   } else {
     console.log('skip: maxRSS not reported on this platform');
+  }
+
+  /* ---- issue #22: atomisk --out, context-advarsel, install-home, fmtDelta, signal ---- */
+
+  // Punkt 1: --out må kun efterlade den gamle eller den nye fil.
+  const atomicDir = join(tmp, 'atomic-out');
+  mkdirSync(atomicDir, { recursive: true });
+  const atomicTarget = join(atomicDir, 'digest.md');
+  const atomicOk = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', atomicTarget], { encoding: 'utf8' });
+  check('--out atomisk: exit 0', atomicOk.status, (v) => v === 0);
+  check('--out atomisk: målet har digest-indhold', existsSync(atomicTarget) ? readFileSync(atomicTarget, 'utf8') : null, (v) => typeof v === 'string' && v.startsWith('# Training digest'));
+  check('--out atomisk: ingen temp-fil tilbage', readdirSync(atomicDir).filter((n) => n !== 'digest.md'), (v) => v.length === 0);
+
+  // Punkt 3: en eksisterende fils mode bevares gennem temp+rename.
+  if (process.platform !== 'win32') {
+    const modeTarget = join(atomicDir, 'mode.md');
+    writeFileSync(modeTarget, 'old digest\n');
+    chmodSync(modeTarget, 0o600);
+    const modeRun = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', modeTarget], { encoding: 'utf8' });
+    const keptMode = statSync(modeTarget).mode & 0o777;
+    check('--out: eksisterende 0600 bevares', modeRun.status, (v) => v === 0);
+    check('--out: eksisterende fils mode er 0600', keptMode, (v) => v === 0o600);
+    console.log(`  mode: eksisterende fil = ${keptMode.toString(8)}`);
+
+    const newModeTarget = join(atomicDir, 'new-mode.md');
+    const newModeRun = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', newModeTarget], { encoding: 'utf8' });
+    const newMode = statSync(newModeTarget).mode & 0o777;
+    const umaskMode = 0o666 & ~process.umask();
+    check('--out: ny fil følger umask', newModeRun.status, (v) => v === 0);
+    check('--out: ny fils mode er ikke mere åben end umask', newMode, (v) => (v & ~umaskMode) === 0);
+    console.log(`  mode: ny fil = ${newMode.toString(8)} (umask ${process.umask().toString(8)})`);
+  } else {
+    console.log('skip: POSIX-filtilstande findes ikke på Windows');
+  }
+
+  // En mappe der ikke kan oprettes: den blokerende sti er urørt.
+  const atomicBlocker = join(tmp, 'atomic-blocker');
+  writeFileSync(atomicBlocker, 'keep me\n');
+  const atomicBlocked = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', join(atomicBlocker, 'digest.md')], { encoding: 'utf8' });
+  check('--out: umulig mappe fejler', atomicBlocked.status, (v) => v !== 0);
+  check('--out: umulig mappe rører ikke gammelt indhold', readFileSync(atomicBlocker, 'utf8'), (v) => v === 'keep me\n');
+
+  // En eksisterende mappe som mål: rename fejler, og den gamle fil er intakt.
+  const atomicDirTarget = join(tmp, 'atomic-target-dir');
+  mkdirSync(atomicDirTarget, { recursive: true });
+  writeFileSync(join(atomicDirTarget, 'old.txt'), 'old\n');
+  const atomicRenameFail = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', atomicDirTarget], { encoding: 'utf8' });
+  check('--out: rename-fejl fejler', atomicRenameFail.status, (v) => v !== 0);
+  check('--out: rename-fejl efterlader gammelt indhold', readFileSync(join(atomicDirTarget, 'old.txt'), 'utf8'), (v) => v === 'old\n');
+  check('--out: rename-fejl rydder temp-filen', readdirSync(tmp).filter((n) => n.startsWith('atomic-target-dir.')), (v) => v.length === 0);
+
+  // Skrivningen fejler midt i filen (EFBIG via ulimit): atomisk skrivning
+  // lader den gamle fil stå, mens direkte writeFile efterlader en halv fil.
+  if (process.platform !== 'win32') {
+    const atomicLimited = join(atomicDir, 'limited.md');
+    writeFileSync(atomicLimited, 'old digest\n');
+    const limited = spawnSync('/bin/sh', ['-c', 'trap "" XFSZ; ulimit -f 1; exec "$0" "$@"', process.execPath, cliPath, tmp, '--format', 'md', '--out', atomicLimited], { encoding: 'utf8' });
+    check('--out: skrivefejl fejler', limited.status, (v) => v !== 0);
+    check('--out: skrivefejl bevarer den gamle fil', readFileSync(atomicLimited, 'utf8'), (v) => v === 'old digest\n');
+    check('--out: skrivefejl rydder temp-filen', readdirSync(atomicDir).filter((n) => n.startsWith('limited.md.')), (v) => v.length === 0);
+  } else {
+    console.log('skip: EFBIG/ulimit findes ikke på Windows');
+  }
+
+  // Punkt 2: en manglende --context advarer på stderr uden at ændre digesten.
+  const contextMissing = join(tmp, 'missing-context.md');
+  const contextEmpty = join(tmp, 'empty-context.md');
+  writeFileSync(contextEmpty, '');
+  const missingCtxRun = spawnSync(process.execPath, [cliPath, tmp, '--context', contextMissing], { encoding: 'utf8' });
+  const emptyCtxRun = spawnSync(process.execPath, [cliPath, tmp, '--context', contextEmpty], { encoding: 'utf8' });
+  const stripGenerated = (s) => s.replace(/^generated=.*$/m, 'generated=<same>');
+  check('--context: manglende fil advarer på stderr med stien', missingCtxRun.stderr, (v) => v.includes(contextMissing));
+  check('--context: manglende fil ændrer ikke digesten', stripGenerated(missingCtxRun.stdout), (v) => v === stripGenerated(emptyCtxRun.stdout));
+  check('--context: tom fil advarer ikke', emptyCtxRun.stderr, (v) => v === '');
+
+  // Punkt 3: installationen må ikke bygge relative mål af en tom HOME,
+  // og containment-tjekket skal bruge path.relative, ikke streng-prefix.
+  const resolveScript = join(tmp, 'resolve-targets.mjs');
+  const insideScript = join(tmp, 'path-inside.mjs');
+  writeFileSync(resolveScript, `import { resolveTargets } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'src', 'install.ts')).href)};\nconsole.log(JSON.stringify(resolveTargets()));\n`);
+  writeFileSync(insideScript, `import { isPathInside } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'src', 'install.ts')).href)};\nconst cases = [\n  ['/home/u', '/home/u/.hermes'],\n  ['/', '/.hermes'],\n  ['/home/u', '/home/u2/.hermes'],\n  ['/home/u', '/home/u/../outside'],\n  ['/home/u', '/home/u'],\n];\nconsole.log(JSON.stringify(cases.map(([root, target]) => isPathInside(root, target))));\n`);
+  const normalHome = join(tmp, 'normal-home');
+  mkdirSync(normalHome, { recursive: true });
+  const normalTargets = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: normalHome, USERPROFILE: normalHome } });
+  let parsedTargets = null;
+  try { parsedTargets = JSON.parse(normalTargets.stdout); } catch {}
+  check('install: resolveTargets virker med normal HOME', normalTargets.status, (v) => v === 0);
+  check('install: alle mål er absolutte og under hjemmemappen', Array.isArray(parsedTargets) ? parsedTargets.map((t) => t.dir) : null, (v) => Array.isArray(v) && v.length === 6 && v.every((d) => isAbsolute(d) && d.startsWith(normalHome + sep)));
+
+  // HOME=/ er roden, ikke en relativ sti: legitime mål må ikke afvises.
+  const rootHomeTargets = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: '/', USERPROFILE: '/' } });
+  let parsedRootTargets = null;
+  try { parsedRootTargets = JSON.parse(rootHomeTargets.stdout); } catch {}
+  const tailParts = (d) => d.split(/[\\/]/).filter(Boolean).slice(-3).join('/');
+  check('install: HOME=/ accepteres', rootHomeTargets.status, (v) => v === 0);
+  check('install: HOME=/ giver seks mål under roden', Array.isArray(parsedRootTargets) ? parsedRootTargets.map((t) => t.dir) : null, (v) => Array.isArray(v) && v.length === 6 && v.every((d) => isAbsolute(d)) && v.some((d) => tailParts(d) === '.hermes/skills/strava-digest'));
+
+  const insideRun = spawnSync(process.execPath, [insideScript], { encoding: 'utf8' });
+  let insideResults = null;
+  try { insideResults = JSON.parse(insideRun.stdout); } catch {}
+  check('install: isPathInside skelner inde fra ude', insideResults, (v) => Array.isArray(v) && v[0] === true && v[1] === true && v[2] === false && v[3] === false && v[4] === false);
+
+  if (process.platform !== 'win32') {
+    const linkHome = join(tmp, 'link-home');
+    symlinkSync(normalHome, linkHome);
+    const linkedHomeTargets = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: linkHome, USERPROFILE: linkHome } });
+    check('install: hjemmemappe som symlink accepteres', linkedHomeTargets.status, (v) => v === 0);
+  } else {
+    console.log('skip: symlink-test kører ikke på Windows');
+  }
+
+  const emptyHomeCwd = join(tmp, 'empty-home-cwd');
+  mkdirSync(join(emptyHomeCwd, '.hermes', 'skills'), { recursive: true });
+  const emptyHomeRun = spawnSync(process.execPath, [cliPath, '--install-skill'], { encoding: 'utf8', cwd: emptyHomeCwd, env: { ...process.env, HOME: '', USERPROFILE: '' } });
+  check('install: tom HOME fejler', emptyHomeRun.status, (v) => v !== 0);
+  check('install: tom HOME giver klar besked på stderr', emptyHomeRun.stderr, (v) => v.includes('home directory') && v.includes('absolute'));
+  check('install: tom HOME skriver ingen fil', existsSync(join(emptyHomeCwd, '.hermes', 'skills', 'strava-digest', 'SKILL.md')), (v) => v === false);
+
+  const relativeHomeRun = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: 'relative/home', USERPROFILE: 'relative/home' } });
+  check('install: relativ HOME fejler', relativeHomeRun.status, (v) => v !== 0);
+  check('install: relativ HOME giver klar besked på stderr', relativeHomeRun.stderr, (v) => v.includes('home directory') && v.includes('absolute'));
+
+  // Punkt 4: fmtDelta skal runde totalen, ikke minutter og sekunder hver for sig.
+  const deltaRun = mkRun('2026-10-12T08:00:00Z', 'Delta', 10, 3600, 150, 180, 100, 50);
+  const deltaText = (sec) => {
+    deltaRun.analysis.secondHalfPaceDeltaSec = sec;
+    const md = renderMarkdown({ sourceLabel: 'test', activitiesInExport: 1, runs: [deltaRun], baselineDays: 28, unmatchedHeaders: [], contextText: '', generatedAt: new Date('2026-10-12T09:00:00Z'), poolLabel: 'Løb' });
+    return (md.match(/2nd half (\S+)/) ?? [])[1] ?? null;
+  };
+  check('fmtDelta: -59,6 sek vises −1:00/km', deltaText(-59.6), (v) => v === '−1:00/km');
+  check('fmtDelta: 59,6 sek vises +1:00/km', deltaText(59.6), (v) => v === '+1:00/km');
+  check('fmtDelta: 0 vises +0:00/km', deltaText(0), (v) => v === '+0:00/km');
+  check('fmtDelta: -119,5 sek vises −2:00/km', deltaText(-119.5), (v) => v === '−2:00/km');
+  check('fmtDelta: null vises –', fmtDelta(null), (v) => v === '–');
+
+  // Punkt 5: launcheren skal oversætte et dræbende signal til 128 + nummer
+  // for alle signaler Node kender, ikke kun en håndskrevet håndfuld.
+  const signalNames = ['SIGSEGV', 'SIGPIPE', 'SIGBUS', 'SIGFPE', 'SIGTRAP', 'SIGUSR1', 'SIGXCPU', 'SIGXFSZ', 'SIGWINCH', 'SIGINT', 'SIGTERM', 'SIGUNKNOWN'];
+  const signalScript = join(tmp, 'signal-map.mjs');
+  writeFileSync(signalScript, `import { signalExitCode } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'bin', 'strava-digest.js')).href)};\nfor (const s of ${JSON.stringify(signalNames)}) console.log(s + '=' + signalExitCode(s));\n`);
+  const signalMapRun = spawnSync(process.execPath, [signalScript], { encoding: 'utf8' });
+  const signalMap = Object.fromEntries((signalMapRun.stdout || '').trim().split('\n').filter(Boolean).map((line) => line.split('=')));
+  check('signal: afbildningen kan importeres uden at starte launcheren', signalMapRun.status, (v) => v === 0);
+  for (const name of signalNames) {
+    const number = osConstants.signals[name];
+    const expected = number == null ? '1' : String(128 + number);
+    check(`signal: ${name} giver ${expected}`, signalMap[name] ?? null, (v) => v === expected);
+  }
+
+  if (process.platform !== 'win32') {
+    const sigRoot = join(tmp, 'signal-launcher');
+    mkdirSync(join(sigRoot, 'bin'), { recursive: true });
+    mkdirSync(join(sigRoot, 'dist'), { recursive: true });
+    copyFileSync(join(repoRoot, 'bin', 'strava-digest.js'), join(sigRoot, 'bin', 'strava-digest.js'));
+    writeFileSync(join(sigRoot, 'dist', 'cli.js'), "process.kill(process.pid, 'SIGINT');\n");
+    const sigE2e = spawnSync(process.execPath, [join(sigRoot, 'bin', 'strava-digest.js')], { encoding: 'utf8' });
+    check('signal: ende-til-ende SIGINT giver exit 130', sigE2e.status, (v) => v === 130);
+  } else {
+    console.log('skip: ende-til-ende signaltest kører ikke på Windows');
   }
 } finally {
   rmSync(tmp, { recursive: true, force: true });
