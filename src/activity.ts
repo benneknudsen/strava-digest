@@ -115,7 +115,10 @@ function trackFromFit(data: any): Track {
  * punkt, så den interpoleres lineært mellem kendte målinger. Puls og
  * fart står også sporadisk og føres derfor frem (seneste værdi gælder).
  */
-export function pointsFromFitRecords(rawRecords: any[]): TrackPoint[] {
+export function pointsFromFitRecords(
+  rawRecords: any[],
+  options?: { onStep?: () => void },
+): TrackPoint[] {
   interface Merged {
     t: Date;
     dist?: number;
@@ -163,15 +166,19 @@ export function pointsFromFitRecords(rawRecords: any[]): TrackPoint[] {
     if (m.dist != null) known.push(i);
   });
   if (known.length) {
+    const onStep = options?.onStep;
+    let next = 0;
+    let lo = -1;
     for (let i = 0; i < merged.length; i++) {
       const m = merged[i]!;
       if (m.dist != null) continue;
-      let lo = -1;
-      let hi = -1;
-      for (const k of known) {
-        if (k < i) lo = k;
-        else if (hi < 0) hi = k;
+      while (next < known.length) {
+        onStep?.();
+        if (known[next]! >= i) break;
+        lo = known[next]!;
+        next += 1;
       }
+      const hi = next < known.length ? known[next]! : -1;
       if (lo < 0) {
         m.dist = merged[hi]!.dist;
       } else if (hi < 0) {

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Reading a FIT file and resolving an archive entry no longer scale
+  quadratically. The distance interpolation for points without a distance
+  measurement walks the known-distance indices once instead of rescanning
+  them per point, and the archive's entry list is built once per source
+  instead of once per activity row. The digest is unchanged — verified byte
+  for byte on a real export.
+
 ### Fixed
 
 - Pause detection now works on densely sampled tracks (GPX/TCX and FIT at
