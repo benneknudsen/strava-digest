@@ -1,4 +1,5 @@
 import type { Track, TrackPoint } from './activity.ts';
+import { maxValue } from './minmax.ts';
 import { pauseMask, pauseTotals } from './pauses.ts';
 import { zonePcts, zoneSeconds, type ZoneConfig } from './zones.ts';
 
@@ -85,7 +86,7 @@ export function analyseRun(track: Track, zoneCfg: ZoneConfig | null = null): Run
     avgPaceSecPerKm:
       movingSec != null && distanceM > 200 ? movingSec / (distanceM / 1000) : null,
     avgHr: hoursWeightedMean(pts, (p) => p.hr),
-    maxHr: hrs.length ? Math.max(...hrs) : null,
+    maxHr: hrs.length ? maxValue(hrs) : null,
     zones,
     zonePct,
     zoneMaxHr,

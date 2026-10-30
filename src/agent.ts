@@ -18,6 +18,7 @@
  * Enheder står i SCHEMA'en, ikke på hver værdi.
  */
 import type { DigestedRun } from './digest.ts';
+import { maxValue, minValue } from './minmax.ts';
 import type { ActivityRow } from './strava.ts';
 
 export interface AgentInput {
@@ -311,7 +312,7 @@ function statsSection(runs: DigestedRun[]): string[] {
   }
   out.push(`max_gap=${n(maxGap, 1)} days${gapBetween ? ` (${gapBetween})` : ''}`);
   out.push(
-    `drift_avg=${avgDrift != null ? n(avgDrift, 1) : MISSING} drift_min=${drifts.length ? n(Math.min(...drifts), 1) : MISSING} drift_max=${drifts.length ? n(Math.max(...drifts), 1) : MISSING}`,
+    `drift_avg=${avgDrift != null ? n(avgDrift, 1) : MISSING} drift_min=${drifts.length ? n(minValue(drifts), 1) : MISSING} drift_max=${drifts.length ? n(maxValue(drifts), 1) : MISSING}`,
   );
   out.push(
     `zone_total_pct=${zoneTotal > 0 ? zoneSec.map((v) => n((v / zoneTotal) * 100, 1)).join(',') : MISSING}`,
