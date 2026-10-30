@@ -4,8 +4,8 @@ import type { CsvTable } from './csv.ts';
  * Strava localises the export: the same column arrives as "Average Heart Rate"
  * or "Gennemsnitlig puls", and a third-party importer has already been broken by
  * non-English headers. So we never trust header names positionally — we map
- * through aliases and, when something essential is missing, print the real
- * header row so a new alias can be added in one edit.
+ * through aliases and report the populated columns we cannot place: the agent
+ * format as a count, Markdown as the names, so a new alias is one edit.
  */
 export type Field =
   | 'id'

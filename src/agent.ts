@@ -59,6 +59,18 @@ function n(v: number | null | undefined, digits = 0): string {
   return v.toFixed(digits);
 }
 
+/**
+ * Puls: CSV'ens tal er Stravas egen, tidsvægtede middel og vinder når den
+ * findes. Ellers bruges filens analyse — samme fallback som Markdown-stien.
+ */
+function avgHeartRate(run: DigestedRun): number | null {
+  return run.row.avgHr ?? run.analysis?.avgHr ?? null;
+}
+
+function maxHeartRate(run: DigestedRun): number | null {
+  return run.row.maxHr ?? run.analysis?.maxHr ?? null;
+}
+
 /** Sekunder som heltal (bruges til varighed og tid i zone). */
 function s(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return MISSING;
@@ -129,8 +141,9 @@ function weeklyBuckets(runs: DigestedRun[]): WeekBucket[] {
     if (run.row.movingSec != null) b.movingSec = (b.movingSec ?? 0) + run.row.movingSec;
     const l = load(run.analysis?.zones ?? null);
     if (l != null) b.load += l;
-    if (run.row.avgHr != null) {
-      b.hrSum += run.row.avgHr;
+    const avgHr = avgHeartRate(run);
+    if (avgHr != null) {
+      b.hrSum += avgHr;
       b.hrCount += 1;
     }
     buckets.set(key, b);
@@ -151,7 +164,9 @@ function runLine(run: DigestedRun, withSplits: boolean): string {
       ? row.movingSec / (row.distanceM / 1000)
       : null;
   parts.push(`pace=${pace == null ? MISSING : n(pace, 1)}`);
-  parts.push(`hr=${row.avgHr != null ? n(row.avgHr) : MISSING}/${row.maxHr != null ? n(row.maxHr) : MISSING}`);
+  const avgHr = avgHeartRate(run);
+  const maxHr = maxHeartRate(run);
+  parts.push(`hr=${avgHr != null ? n(avgHr) : MISSING}/${maxHr != null ? n(maxHr) : MISSING}`);
   if (analysis?.zonePct) {
     parts.push(`z=${analysis.zonePct.map((p) => n(p, 1)).join(',')}`);
   } else {
@@ -208,8 +223,9 @@ function windowSummary(runs: DigestedRun[]): {
         zoneSecTotal += v;
       });
     }
-    if (run.row.avgHr != null) {
-      hrSum += run.row.avgHr;
+    const avgHr = avgHeartRate(run);
+    if (avgHr != null) {
+      hrSum += avgHr;
       hrCount += 1;
     }
   }

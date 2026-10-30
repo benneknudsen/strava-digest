@@ -128,9 +128,10 @@ matter, ask.
 
 - `No runs found in the export (try --all)` → the activity type may be
   translated to the account language ("Løb" instead of "Run", "Lauf",
-  "Löp"), or it may be other activity types — `--all` helps. The tool prints
-  the unmapped column names when it cannot place a column, so a new alias is
-  one line in `src/columns.ts`.
+  "Löp"), or it may be other activity types — `--all` helps. The default
+  agent format reports how many populated export columns it could not place;
+  run with `--format md` to see up to 12 of their header names, so a new alias
+  is one line in `src/columns.ts`.
 - A run line containing `err=` means that file could not be read. The rest of
   the digest is still valid.
 - `z=-` means the run has no heart-rate data to zone. The zone boundaries

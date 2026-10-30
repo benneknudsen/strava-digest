@@ -828,7 +828,8 @@ try {
   const extraMd = execFileSync('node', ['src/cli.ts', extraDir, '--format', 'md'], { encoding: 'utf8' });
 
   check('agent-formatet tæller uventede kolonner i stedet for at liste dem', extraAgent, (v) =>
-    /\d+ Strava columns in the export are not used/.test(v) &&
+    /\d+ populated Strava export columns are not mapped — some may be training data\. Run with --format md to list their names; a missing alias is one line\./.test(v) &&
+    !/hold weather, gear/.test(v) &&
     !/Unmapped columns:/.test(v) &&
     !v.includes('Vindhastighed'),
   );
@@ -2110,6 +2111,43 @@ try {
   });
   check('agent: WEEKS markerer løb uden analyse', weekOut, (v) =>
     /^w=2026-W42 r=2 km=10\.0 t=3600 load=71 hr=150 without_analysis=1$/m.test(v),
+  );
+
+  // Regression (issue #23): når CSV'en mangler puls men sporet har den, skal
+  // agent-linjen og WEEKS bruge analysens puls — samme fallback som Markdown.
+  // En række uden puls nogen steder viser fortsat -/- og tælles ikke med.
+  const csvHrMissing = mkRun('2026-10-16T10:00:00Z', 'Puls kun i fil', 10, 4000, null, null, 88, 50);
+  csvHrMissing.analysis.avgHr = 152;
+  csvHrMissing.analysis.maxHr = 178;
+  const csvHrPresent = mkRun('2026-10-15T10:00:00Z', 'Puls i CSV', 8, 3200, 160, 180, 92, 40);
+  const noHrAnywhere = mkRun('2026-10-14T10:00:00Z', 'Ingen puls', 5, 2000, null, null, 80, 30);
+  noHrAnywhere.analysis.avgHr = null;
+  noHrAnywhere.analysis.maxHr = null;
+  const hrFallbackPopulation = [csvHrMissing, csvHrPresent, noHrAnywhere];
+  const hrFallbackOut = renderAgent({
+    sourceLabel: 'test',
+    activitiesInExport: 3,
+    runsTotal: 3,
+    runs: hrFallbackPopulation,
+    allRuns: hrFallbackPopulation,
+    detailCount: 1,
+    baselineDays: 28,
+    contextText: '',
+    generatedAt: new Date('2026-10-17T08:00:00Z'),
+    maxHr: 200,
+    maxHrSource: 'flag',
+    notes: [],
+  });
+  const hrLineFor = (name) =>
+    hrFallbackOut.split('\n').find((line) => line.startsWith('d=') && line.includes(`n="${name}"`)) ?? '';
+  check('agent: puls fra filen bruges når CSV mangler', hrLineFor('Puls kun i fil'), (v) =>
+    /(?:^|\s)hr=152\/178(?:\s|$)/.test(v),
+  );
+  check('agent: række uden puls nogen steder viser hr=-/-', hrLineFor('Ingen puls'), (v) =>
+    /(?:^|\s)hr=-\/-(?:\s|$)/.test(v),
+  );
+  check('agent: WEEKS bruger samme puls-fallback', hrFallbackOut, (v) =>
+    /^w=2026-W42 r=3 .* hr=156 without_analysis=0$/m.test(v),
   );
 
   // Når begge vinduer har lige mange analyserede løb, er load-tallene

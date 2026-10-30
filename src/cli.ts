@@ -311,8 +311,8 @@ async function runBulk(
       ...coverage,
       ...(map.unmatched.length
         ? [
-            `${map.unmatched.length} Strava columns in the export are not used — they hold weather, gear ` +
-              'and other non-training data. Run with --format md to list them.',
+            `${map.unmatched.length} populated Strava export columns are not mapped — some may be training ` +
+              'data. Run with --format md to list their names; a missing alias is one line.',
           ]
         : []),
       ...(usesObservedMaxHr
