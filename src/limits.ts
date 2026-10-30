@@ -48,14 +48,20 @@ export function limitForFileName(name: string): number {
 }
 
 export function formatMb(bytes: number): string {
-  const mb = Math.ceil((bytes / MB) * 10) / 10;
+  const mb = Math.round((bytes / MB) * 10) / 10;
   return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
 }
 
-export function tooLargeError(name: string, bytes: number): Error {
+/**
+ * `bytes` is the size we know. Pass `null` when we stopped reading at the
+ * limit and the real size is unknown: the message then says "more than the
+ * limit" instead of presenting the bytes counted so far as the file size.
+ */
+export function tooLargeError(name: string, bytes: number | null): Error {
   const { limit, kind } = limitInfoForFileName(name);
   const shipKind = kind === 'other files' ? 'files' : kind;
+  const size = bytes == null ? `more than ${formatMb(limit)}` : formatMb(bytes);
   return new Error(
-    `${name} is ${formatMb(bytes)}, which is larger than the ${formatMb(limit)} limit for ${kind} — a Strava export does not ship ${shipKind} that size.`,
+    `${name} is ${size}, which is larger than the ${formatMb(limit)} limit for ${kind} — a Strava export does not ship ${shipKind} that size.`,
   );
 }

@@ -144,7 +144,9 @@ async function readZipEntry(
         if (settled) return;
         total += chunk.length;
         if (total > limit) {
-          fail(tooLargeError(name, total));
+          // The declared size already passed the check above, so the header
+          // understated the real size; report the size as unknown.
+          fail(tooLargeError(name, null));
           return;
         }
         chunks.push(chunk);

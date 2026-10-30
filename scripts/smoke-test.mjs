@@ -20,9 +20,11 @@ import {
   ACTIVITY_FILE_LIMIT_BYTES,
   activityFormatOf,
   EXPORT_FILE_LIMIT_BYTES,
+  formatMb,
   limitForFileName,
   tooLargeError,
 } from '../src/limits.ts';
+import { maxValue, minValue } from '../src/minmax.ts';
 import { pauseMask, pauseTotals } from '../src/pauses.ts';
 import { findActivitiesCsv, openSource, resolveActivityEntry } from '../src/source.ts';
 import { normalizeType, parseActivities, RUN_TYPES } from '../src/strava.ts';
@@ -2614,7 +2616,9 @@ try {
   const lyingTooLargeRun = runZipCli([lyingTooLarge]);
   check('zip: actual bytes over the limit abort the read', lyingTooLargeRun.status, (v) => v !== 0);
   check('zip: actual bytes over the limit give a clear message', lyingTooLargeRun.stderr, (v) =>
-    /activities\.csv is \d+(?:\.\d+)? MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size\./.test(v),
+    v.includes(
+      'activities.csv is more than 100 MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size.',
+    ),
   );
   check('zip: actual-size error is not a stack trace', lyingTooLargeRun.stderr, (v) =>
     !/^\s+at /m.test(v),
@@ -2792,6 +2796,48 @@ try {
   check('error: activities.csv names the export limit', tooLargeError('activities.csv', hugeFitBytes).message, (v) =>
     v.includes('100 MB limit for export files') && !v.includes('other files'),
   );
+
+  // Issue #34: formatMb rounds instead of always rounding up.
+  const MB = 1024 * 1024;
+  check('formatMb: 98.74 MiB rundes til 98.7', formatMb(Math.floor(98.74 * MB)), (v) => v === '98.7 MB');
+  check('formatMb: 10 MiB vises uden decimal', formatMb(10 * MB), (v) => v === '10 MB');
+  check('formatMb: 100 MiB vises uden decimal', formatMb(100 * MB), (v) => v === '100 MB');
+  check('formatMb: 10.04 MiB rundes ned til 10 MB', formatMb(Math.floor(10.04 * MB)), (v) => v === '10 MB');
+  check('formatMb: 10.06 MiB rundes op til 10.1 MB', formatMb(Math.floor(10.06 * MB)), (v) => v === '10.1 MB');
+
+  // Issue #34: an unknown size must not be reported as the counted bytes.
+  check('error: ukendt størrelse siger more than limit', tooLargeError('activities.csv', null).message, (v) =>
+    v ===
+    'activities.csv is more than 100 MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size.',
+  );
+  check('error: kendt erklæret størrelse vises som den er', tooLargeError('activities.csv', 250 * MB).message, (v) =>
+    v ===
+    'activities.csv is 250 MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size.',
+  );
+
+  // Issue #34: Math.max/Math.min spread overflows the stack on a large array.
+  // The measured first failing length on this machine was 109,828 elements;
+  // 500,000 is safely above it and still fast.
+  const bigNumbers = Array.from({ length: 500_000 }, (_, i) => i);
+  check('maxValue: 500000 elementer kaster ikke', maxValue(bigNumbers), (v) => v === 499_999);
+  check('minValue: 500000 elementer kaster ikke', minValue(bigNumbers), (v) => v === 0);
+  const smallNumbers = [3, -1, 4, 1, 5, -9, 2];
+  check('maxValue matcher Math.max på lille array', maxValue(smallNumbers), (v) =>
+    Object.is(v, Math.max(...smallNumbers)),
+  );
+  check('minValue matcher Math.min på lille array', minValue(smallNumbers), (v) =>
+    Object.is(v, Math.min(...smallNumbers)),
+  );
+  check('maxValue propagerer NaN som Math.max', maxValue([1, NaN, 3]), (v) => Number.isNaN(v));
+  check('minValue propagerer NaN som Math.min', minValue([1, NaN, 3]), (v) => Number.isNaN(v));
+  check('maxValue bevarer Infinity', maxValue([-Infinity, 5, Infinity, 0]), (v) => v === Infinity);
+  check('minValue bevarer -Infinity', minValue([-Infinity, 5, Infinity, 0]), (v) => v === -Infinity);
+  check('maxValue håndterer negative tal', maxValue([-5, -2, -9]), (v) => v === -2);
+  check('minValue håndterer negative tal', minValue([-5, -2, -9]), (v) => v === -9);
+  check('maxValue håndterer ét element', maxValue([42]), (v) => v === 42);
+  check('minValue håndterer ét element', minValue([42]), (v) => v === 42);
+  check('maxValue på tomt array som Math.max', maxValue([]), (v) => Object.is(v, -Infinity));
+  check('minValue på tomt array som Math.min', minValue([]), (v) => Object.is(v, Infinity));
 
   for (const name of bypassNames) {
     const bypassCsv = Buffer.from(

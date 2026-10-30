@@ -12,6 +12,7 @@ import { discoverSources, pickSource, searchDirs, type Candidate } from './inter
 import { installSkill, renderInstall } from './install.ts';
 import { activityFormatOf, limitForFileName, tooLargeError } from './limits.ts';
 import { collectActivityFiles, firstValidPoint, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
+import { maxValue } from './minmax.ts';
 import { type ExportSource, findActivitiesCsv, openSource, readFileLimited, resolveActivityEntry } from './source.ts';
 import { type ActivityRow, type ActivityStats, parseActivities } from './strava.ts';
 import { resolveZoneConfig } from './zones.ts';
@@ -582,7 +583,7 @@ function observedMaxHeartRate(
 ): number | null {
   const values = activities.map((a) => a.maxHr).filter((v): v is number => v != null && v > 0);
   if (maxHrOfSkipped != null && maxHrOfSkipped > 0) values.push(maxHrOfSkipped);
-  return values.length ? Math.max(...values) : null;
+  return values.length ? maxValue(values) : null;
 }
 
 function parseMaxHr(value: string): number {
