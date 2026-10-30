@@ -198,7 +198,6 @@ try {
   }
   const pauseTrack = {
     points: pausePoints,
-    laps: [],
     sport: 'running',
     source: 'gpx',
     distanceDerived: false,
@@ -239,7 +238,7 @@ try {
     });
   }
   const everyOtherAz = analyseRun(
-    { points: everyOtherPoints, laps: [], sport: 'running', source: 'gpx', distanceDerived: false },
+    { points: everyOtherPoints, sport: 'running', source: 'gpx', distanceDerived: false },
     resolveZoneConfig(200, undefined),
   );
   const everyOtherStops = pauseTotals(everyOtherPoints);
@@ -318,7 +317,6 @@ try {
   }
   const duplicatePauseAz = analyseRun({
     points: duplicatePausePoints,
-    laps: [],
     sport: 'running',
     source: 'gpx',
     distanceDerived: false,
@@ -1140,7 +1138,6 @@ try {
       { t: new Date('2026-10-12T06:30:00Z'), hr: 150 },
       { t: new Date('2026-10-12T06:35:00Z'), hr: 152 },
     ],
-    laps: [],
     sport: 'running',
     source: 'fit',
     distanceDerived: false,
@@ -1167,7 +1164,6 @@ try {
       { t: new Date('2026-10-12T06:30:00Z'), distM: 0 },
       { t: new Date('2026-10-12T06:35:00Z'), distM: 0 },
     ],
-    laps: [],
     sport: 'running',
     source: 'fit',
     distanceDerived: false,

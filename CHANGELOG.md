@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Removed code that was never read: an unused helper, an unread column count,
+  an unused field on the parsed CSV, and the FIT lap structures that were
+  parsed but never used. The digest output is unchanged — verified byte for
+  byte on a real export — except that the `--json` output no longer carries
+  the unused `id` key on each row.
+
 ### Fixed
 
 - Pause detection now works on densely sampled tracks (GPX/TCX and FIT at

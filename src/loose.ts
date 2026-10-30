@@ -72,7 +72,6 @@ export function rowFromTrack(
   // ellers blive læst som en rigtig distance på nul kilometer.
   const distanceM = last.distM != null && Number.isFinite(last.distM) ? last.distM : null;
   return {
-    id: '',
     date: first.t,
     name: filename.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || filename,
     type: track.sport === 'unknown' ? 'ukendt' : track.sport,

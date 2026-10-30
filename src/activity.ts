@@ -13,18 +13,10 @@ export interface TrackPoint {
   lon?: number;
 }
 
-export interface Lap {
-  startIndex: number;
-  movingSec: number;
-  distanceM: number;
-  avgHr?: number;
-  maxHr?: number;
-}
-
 export interface Track {
   points: TrackPoint[];
-  laps: Lap[];
   sport: string;
+  /** read by the smoke tests as a format seam; production code does not branch on it */
   source: 'fit' | 'gpx' | 'tcx';
   /** true when per-point distance had to be derived from GPS positions */
   distanceDerived: boolean;
@@ -85,16 +77,8 @@ function trackFromFit(data: any): Track {
   const points = pointsFromFitRecords(rawRecords);
   const sessions: any[] = data.sessions ?? [];
   const session = sessions[0] ?? {};
-  const laps: Lap[] = (data.laps ?? []).map((l: any) => ({
-    startIndex: 0,
-    movingSec: finite(l.total_timer_time) ?? 0,
-    distanceM: finite(l.total_distance) ?? 0,
-    avgHr: finite(l.avg_heart_rate),
-    maxHr: finite(l.max_heart_rate),
-  }));
   return {
     points,
-    laps,
     sport: typeof session.sport === 'string' ? session.sport : 'unknown',
     source: 'fit',
     distanceDerived: false,
@@ -274,7 +258,7 @@ function parseGpx(xml: string): Track {
   deriveSpeeds(points);
   const trk = xml.match(/<trk(?:\s[^>]*)?>([\s\S]*?)<\/trk>/i)?.[1] ?? '';
   const sport = trk.match(/<type>([^<]+)<\/type>/i)?.[1]?.trim().toLowerCase() || 'unknown';
-  return { points, laps: [], sport, source: 'gpx', distanceDerived: true };
+  return { points, sport, source: 'gpx', distanceDerived: true };
 }
 
 /* -------------------------------------------------------------------- TCX */
@@ -307,7 +291,7 @@ function parseTcx(xml: string): Track {
   const derived = !points.some((p) => p.distM != null);
   if (derived) fillDistances(points);
   deriveSpeeds(points);
-  return { points, laps: [], sport, source: 'tcx', distanceDerived: derived };
+  return { points, sport, source: 'tcx', distanceDerived: derived };
 }
 
 /* --------------------------------------------------------------- helpers */

@@ -33,6 +33,11 @@ export type Field =
  * column arrives under a different name depending on the account language.
  * English and Danish are the ones we have real exports for; the rest are the
  * obvious translations and are cheap to add — one line each.
+ *
+ * `id`, `avgSpeed`, `temperature`, `avgCadence`, `maxCadence` and `avgWatts`
+ * are mapped but never read by the digest: they stay so a populated-but-unused
+ * export column does not show up in the "unmapped" count. Removing them would
+ * change the digest's notes.
  */
 const ALIASES: Record<Field, string[]> = {
   id: ['activity id', 'aktivitet id', 'aktivitets id', 'id', 'aktivitats id'],
@@ -240,8 +245,6 @@ export interface ColumnMap {
   index: Map<Field, number[]>;
   /** headers we could not place, and that hold a value in at least one row */
   unmatched: string[];
-  /** headers we could not place that are empty in every row */
-  unmatchedEmpty: number;
 }
 
 export function mapColumns(table: CsvTable): ColumnMap {
@@ -288,8 +291,7 @@ export function mapColumns(table: CsvTable): ColumnMap {
     table.rows.some((row) => (row[i] ?? '').trim() !== ''),
   );
   const unmatched = populatedIdx.map((i) => table.headers[i]!);
-  const unmatchedEmpty = unmatchedIdx.length - populatedIdx.length;
-  return { index, unmatched, unmatchedEmpty };
+  return { index, unmatched };
 }
 
 export function raw(row: string[], map: ColumnMap, field: Field): string {
