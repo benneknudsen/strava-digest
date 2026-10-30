@@ -11,6 +11,7 @@ import { analyseRun } from '../src/analysis.ts';
 import { parseActivityBuffer, pointsFromFitRecords } from '../src/activity.ts';
 import { mapColumns, num, parseDate } from '../src/columns.ts';
 import { parseCsv } from '../src/csv.ts';
+import { utf8Bytes } from './bytes.mjs';
 import { renderMarkdown, fmtDuration, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
 import { discoverSources } from '../src/interactive.ts';
@@ -2334,6 +2335,40 @@ try {
   );
   check('zip: clean Markdown has no skipped-entry note', runZipCli([cleanZip, '--format', 'md']).stdout, (v) =>
     !v.includes('skipped because'),
+  );
+
+  /* ---- regression (issue #25): the measurement script must count bytes ---- */
+
+  const multibyteName = 'Long run · test';
+  const multibyteZip = writeZip(
+    'zip-multibyte',
+    buildZip([
+      {
+        name: 'activities.csv',
+        data: Buffer.from(
+          readFileSync(join(tmp, 'activities.csv'), 'utf8').replace('Long run', multibyteName),
+        ),
+      },
+      { name: 'activities/Run-1001.gpx', data: readFileSync(join(tmp, 'activities/Run-1001.gpx')) },
+      { name: 'activities/Run-1002.tcx', data: readFileSync(join(tmp, 'activities/Run-1002.tcx')) },
+      { name: 'activities/Run-1003.gpx', data: readFileSync(join(tmp, 'activities/Run-1003.gpx')) },
+    ]),
+  );
+  const multibyteDigest = execFileSync(process.execPath, [cliPath, multibyteZip], {
+    encoding: 'utf8',
+    cwd: tmp,
+  });
+  check('measure: fixture digest contains multi-byte characters', multibyteDigest, (v) =>
+    utf8Bytes(v) !== v.length && v.includes(multibyteName),
+  );
+  const multibyteMeasure = execFileSync(
+    process.execPath,
+    [join(repoRoot, 'scripts', 'measure-compression.mjs'), multibyteZip],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  const printedDigestBytes = Number(multibyteMeasure.match(/digest\s+.*?\((\d+) bytes\)/)?.[1]);
+  check('measure: digest byte figure is the byte count, not the character count', printedDigestBytes, (v) =>
+    v === utf8Bytes(multibyteDigest) && v !== multibyteDigest.length,
   );
 
   const declaredTooLarge = writeZip(

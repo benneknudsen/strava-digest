@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { open as openZip } from 'yauzl';
+import { utf8Bytes } from './bytes.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..');
@@ -83,6 +84,7 @@ if (run.status !== 0) {
   process.exit(1);
 }
 const digest = run.stdout;
+const digestBytes = utf8Bytes(digest);
 
 /* ---- 3. report ---- */
 
@@ -108,12 +110,12 @@ console.log(`    binary FIT    ${fmt(cats.binary).padStart(9)}  unreadable by an
 console.log(`    XML (tcx/gpx) ${fmt(cats.xml).padStart(9)}  ≈ ${tokStr(cats.xml)} tokens`);
 console.log('');
 console.log('DIGEST');
-console.log(`  digest          ${fmt(digest.length).padStart(9)}  (${digest.length} bytes)  ≈ ${tokStr(digest.length)} tokens  (${runCount} runs)`);
+console.log(`  digest          ${fmt(digestBytes).padStart(9)}  (${digestBytes} bytes)  ≈ ${tokStr(digestBytes)} tokens  (${runCount} runs)`);
 console.log('');
 console.log('SAVING');
-const ratio = rawActivity / digest.length;
-console.log(`  ${ratio.toFixed(0)}× smaller  —  ${fmt(rawActivity - digest.length)} saved, ${(100 - (digest.length / rawActivity) * 100).toFixed(2)} % of the raw size`);
-console.log(`  ${(tok(rawActivity) / tok(digest.length)).toFixed(0)}× fewer tokens than the whole export`);
+const ratio = rawActivity / digestBytes;
+console.log(`  ${ratio.toFixed(0)}× smaller  —  ${fmt(rawActivity - digestBytes)} saved, ${(100 - (digestBytes / rawActivity) * 100).toFixed(2)} % of the raw size`);
+console.log(`  ${(tok(rawActivity) / tok(digestBytes)).toFixed(0)}× fewer tokens than the whole export`);
 if (cats.xml > 0) {
-  console.log(`  ${(tok(cats.xml) / tok(digest.length)).toFixed(0)}× fewer tokens than the XML a model can even read`);
+  console.log(`  ${(tok(cats.xml) / tok(digestBytes)).toFixed(0)}× fewer tokens than the XML a model can even read`);
 }
