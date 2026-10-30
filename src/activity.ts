@@ -242,10 +242,16 @@ function toArray(v: unknown): any[] {
 
 function parseGpx(xml: string): Track {
   const points: TrackPoint[] = [];
-  const re = /<trkpt[^>]*lat="([-\d.]+)"[^>]*lon="([-\d.]+)"[^>]*>([\s\S]*?)<\/trkpt>/g;
+  const re = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml))) {
-    const body = m[3] ?? '';
+    const attrs = m[1] ?? '';
+    // Match the attribute boundary, not a word boundary: `\b` also matches at
+    // `-`, so it would read `data-lat="99"` as `lat`.
+    const lat = attrs.match(/(?:^|\s)lat="([-\d.]+)"/);
+    const lon = attrs.match(/(?:^|\s)lon="([-\d.]+)"/);
+    if (!lat || !lon) continue;
+    const body = m[2] ?? '';
     const time = body.match(/<time>([^<]+)<\/time>/);
     const ele = body.match(/<ele>([-\d.]+)<\/ele>/);
     const hr = body.match(/<(?:gpxtpx:)?hr>(\d+)<\/(?:gpxtpx:)?hr>/);
@@ -254,8 +260,8 @@ function parseGpx(xml: string): Track {
     if (!t || Number.isNaN(t.getTime())) continue;
     points.push({
       t,
-      lat: Number(m[1]),
-      lon: Number(m[2]),
+      lat: Number(lat[1]),
+      lon: Number(lon[1]),
       altM: ele ? Number(ele[1]) : undefined,
       hr: hr ? Number(hr[1]) : undefined,
       cad: cad ? Number(cad[1]) : undefined,

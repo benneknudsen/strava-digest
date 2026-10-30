@@ -4,7 +4,7 @@ import type { Track, TrackPoint } from './activity.ts';
 import type { RunAnalysis } from './analysis.ts';
 import { isPlausibleDate } from './columns.ts';
 import { activityFormatOf } from './limits.ts';
-import { RUN_TYPES, type ActivityRow } from './strava.ts';
+import { normalizeType, RUN_TYPES, type ActivityRow } from './strava.ts';
 
 /**
  * Løse aktivitetsfiler — en enkelt fil eller en mappe uden `activities.csv`.
@@ -85,6 +85,6 @@ export function rowFromTrack(
     calories: null,
     gear: '',
     filename,
-    isRun: RUN_TYPES.includes(track.sport.toLowerCase()),
+    isRun: RUN_TYPES.includes(normalizeType(track.sport)),
   };
 }

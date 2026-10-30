@@ -340,7 +340,7 @@ export function num(row: string[], map: ColumnMap, field: Field): number | null 
   return Number.isFinite(n) ? n : null;
 }
 
-/** Accepts "52:31", "1:02:11", "1875.4" (seconds) or "1h 2m". */
+/** Accepts "52:31", "1:02:11", "1875.4" (seconds) or "1 t 30 min". */
 export function durationSec(row: string[], map: ColumnMap, field: Field): number | null {
   const v = raw(row, map, field);
   if (!v) return null;
@@ -351,12 +351,45 @@ export function durationSec(row: string[], map: ColumnMap, field: Field): number
     const c = hms[3];
     return c != null ? a * 3600 + b * 60 + Number(c) : a * 60 + b;
   }
-  const textual = v.match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?/i);
-  if (textual && (textual[1] || textual[2])) {
-    return Number(textual[1] ?? 0) * 3600 + Number(textual[2] ?? 0) * 60;
+  // Units are mandatory wherever they disambiguate. In the hour branch the
+  // minute unit may only be omitted when nothing follows (1h30), and a seconds
+  // group may only follow a number that carries its minute unit. Without that,
+  // "1 h 30 s" splits into minutes "3" and seconds "0" and invents 3780.
+  const hourUnit = '(?:timer|time|hours|hour|hrs|hr|h|t)';
+  const minUnit = '(?:minutter|minutes|minute|mins|min|m)';
+  const secUnit = '(?:sekunder|sekund|seconds|second|secs|sec|sek|s)';
+  const textual = v.match(
+    new RegExp(
+      `^\\s*(?:` +
+        `(\\d+)\\s*${hourUnit}` +
+          `(?:` +
+            `\\s*(\\d+)\\s*${minUnit}(?:\\s*(\\d+)\\s*${secUnit})?` +
+            `|\\s*(\\d+)\\s*${secUnit}` +
+            `|\\s*(\\d+)` +
+          `)?` +
+        `|(\\d+)\\s*${minUnit}(?:\\s*(\\d+)\\s*${secUnit})?` +
+        `|(\\d+)\\s*${secUnit}` +
+      `)\\s*[.,;]*\\s*$`,
+      'i',
+    ),
+  );
+  if (textual) {
+    if (textual[1] != null) {
+      if (textual[2] != null) {
+        return Number(textual[1]) * 3600 + Number(textual[2]) * 60 + Number(textual[3] ?? 0);
+      }
+      if (textual[4] != null) return Number(textual[1]) * 3600 + Number(textual[4]);
+      return Number(textual[1]) * 3600 + Number(textual[5] ?? 0) * 60;
+    }
+    if (textual[6] != null) {
+      return Number(textual[6]) * 60 + Number(textual[7] ?? 0);
+    }
+    return Number(textual[8]);
   }
-  const n = num(row, map, field);
-  return n;
+  // A string with letters that matched no pattern is not a number. Scraping
+  // the digits would turn "abc123" into a made-up duration.
+  if (/[a-z]/i.test(v)) return null;
+  return num(row, map, field);
 }
 
 /**

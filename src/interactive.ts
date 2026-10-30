@@ -188,7 +188,7 @@ function printCandidates(candidates: Candidate[]): void {
 }
 
 /** Fjern omgivende citationstegn og `file://`-præfiks fra en indsat sti. */
-function cleanPath(raw: string): string {
+export function cleanPath(raw: string): string {
   let s = raw.trim();
   const quoted = s.match(/^(['"])(.*)\1$/);
   if (quoted) s = quoted[2]!.trim();
@@ -199,6 +199,8 @@ function cleanPath(raw: string): string {
     } catch {
       s = rest;
     }
+    // file:///C:/x has three slashes; the third belongs to the URL, not the path.
+    s = s.replace(/^\/([A-Za-z]:)/, '$1');
   }
   return s;
 }
