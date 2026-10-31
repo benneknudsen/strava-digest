@@ -210,7 +210,12 @@ async function runBulk(
     const total = stats.rowsInExport;
     console.log(`\n${total} ${total === 1 ? 'activity' : 'activities'} in total (shown: ${Math.min(400, activities.length)})`);
     const noFilenameInPool = pool.filter((row) => !row.filename).length;
-    for (const note of [...source.warnings(), ...coverageNotes(stats, noFilenameInPool, true)]) {
+    const distanceNote = distanceUnitNote(stats);
+    for (const note of [
+      ...source.warnings(),
+      ...(distanceNote ? [distanceNote] : []),
+      ...coverageNotes(stats, noFilenameInPool, true),
+    ]) {
       console.log(`\n${note}`);
     }
     if (map.unmatched.length) console.log(`\nUnmapped columns: ${map.unmatched.join(' · ')}`);
@@ -297,6 +302,7 @@ async function runBulk(
     args.maxHr != null ? 'flag' : usesObservedMaxHr ? 'export-observation' : null;
   const noFilenameInPool = pool.filter((row) => !row.filename).length;
   const coverage = coverageNotes(stats, noFilenameInPool);
+  const distanceNote = distanceUnitNote(stats);
   const sourceNotes = source.warnings();
   const hostNotes = [
     ...(map.unmatched.length
@@ -318,8 +324,10 @@ async function runBulk(
     poolLabel: args.all ? 'Activities' : 'Runs',
     maxHr: args.maxHr ?? observedMaxHr ?? null,
     maxHrSource: zoneSource,
+    distanceNote: distanceNote ?? undefined,
     notes: [
       ...sourceNotes,
+      ...(distanceNote ? [distanceNote] : []),
       ...coverage,
       ...(map.unmatched.length
         ? [
@@ -341,6 +349,14 @@ async function runBulk(
   };
 
   return emitDigest(input, args, analysed);
+}
+
+function distanceUnitNote(stats: ActivityStats): string | null {
+  if (!stats.distanceUnitAssumed) return null;
+  return (
+    'The distance unit column is empty or contradictory and the header names no unit, ' +
+    'so distances use the column-scale assumption: a median above 200 means metres, otherwise kilometres.'
+  );
 }
 
 /**
@@ -509,8 +525,9 @@ async function emitDigest(
   args: Args,
   allRuns: DigestedRun[],
 ): Promise<number> {
+  const { distanceNote, ...jsonInput } = input;
   const output = args.json
-    ? `${JSON.stringify({ ...input, markdown: renderMarkdown(input) }, null, 2)}\n`
+    ? `${JSON.stringify({ ...jsonInput, markdown: renderMarkdown(input) }, null, 2)}\n`
     : args.format === 'md'
       ? renderMarkdown(input)
       : renderAgent({

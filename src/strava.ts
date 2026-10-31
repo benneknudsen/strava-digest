@@ -2,6 +2,7 @@ import type { CsvTable } from './csv.ts';
 import {
   type ColumnMap,
   distanceMeters,
+  distanceUnits,
   durationSec,
   num,
   parseDate,
@@ -108,6 +109,8 @@ export interface ActivityStats {
    * observation from the export, so the observed max can include it.
    */
   maxHrOfSkipped: number | null;
+  /** true when the distance unit came from the column scale after a unit column was unusable */
+  distanceUnitAssumed: boolean;
 }
 
 export interface ParsedActivities {
@@ -129,11 +132,13 @@ export interface ParsedActivities {
  */
 export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActivities {
   const activities: ActivityRow[] = [];
+  const units = distanceUnits(table, map);
   const stats: ActivityStats = {
     rowsInExport: table.rows.length,
     skippedNoDate: 0,
     skippedNoDateNoFilename: 0,
     maxHrOfSkipped: null,
+    distanceUnitAssumed: units.assumed,
   };
   for (const row of table.rows) {
     const date = parseDate(raw(row, map, 'date'));
@@ -153,7 +158,7 @@ export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActiviti
       date,
       name: raw(row, map, 'name') || '(no name)',
       type: type || '(unknown)',
-      distanceM: distanceMeters(row, map),
+      distanceM: distanceMeters(row, map, units),
       movingSec: durationSec(row, map, 'movingSec'),
       elapsedSec: durationSec(row, map, 'elapsedSec'),
       avgHr: num(row, map, 'avgHr'),

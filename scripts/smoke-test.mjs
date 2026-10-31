@@ -2082,6 +2082,147 @@ try {
   check('dansk "Løb" er et løb', daRows[0]?.isRun, (v) => v === true);
   check('dansk "Distance" i km tolkes som meter', daRows[0]?.distanceM, (v) => v === 10_000);
 
+  /* ---- regression (issue #37): enheden kommer fra kilden, ikke værdien ---- */
+  const distanceTable = (headers, rows) => {
+    const csv = parseCsv(
+      [headers.join(','), ...rows.map((row) => row.map((cell) => `"${cell}"`).join(','))].join('\n'),
+    );
+    const parsed = parseActivities(csv, mapColumns(csv));
+    return { distances: parsed.activities.map((activity) => activity.distanceM), stats: parsed.stats };
+  };
+  const oneDistance = (header, value, unitHeader = null, unit = null) =>
+    distanceTable(
+      ['Activity Date', header, ...(unitHeader ? [unitHeader] : [])],
+      [['2026-10-12 06:32:10', value, ...(unitHeader ? [unit] : [])]],
+    ).distances;
+
+  check('issue #37 (a): Distance (m) med 150 giver 150 m', oneDistance('Distance (m)', '150'), (v) =>
+    JSON.stringify(v) === JSON.stringify([150]),
+  );
+  check('issue #37 (b): Distance (km) med 150 giver 150 km', oneDistance('Distance (km)', '150'), (v) =>
+    JSON.stringify(v) === JSON.stringify([150_000]),
+  );
+  check(
+    'issue #37 (c): enhedskolonne slår headeren',
+    oneDistance('Distance (m)', '150', 'Distance Unit', 'km'),
+    (v) => JSON.stringify(v) === JSON.stringify([150_000]),
+  );
+  const mixedMetres = distanceTable(
+    ['Activity Date', 'Distance'],
+    [
+      ['2026-10-13 06:32:10', '150'],
+      ['2026-10-12 06:32:10', '5000'],
+    ],
+  );
+  check('issue #37 (d): bar header med {150;5000} giver meter for begge rækker', mixedMetres.distances, (v) =>
+    JSON.stringify(v) === JSON.stringify([150, 5000]),
+  );
+  const kmScale = distanceTable(
+    ['Activity Date', 'Distance'],
+    [
+      ['2026-10-13 06:32:10', '5,0'],
+      ['2026-10-12 06:32:10', '7,02'],
+    ],
+  );
+  check('issue #37 (e): bar header med {5,0;7,02} giver km', kmScale.distances, (v) =>
+    JSON.stringify(v) === JSON.stringify([5000, 7020]),
+  );
+  const kmWithLongRide = distanceTable(
+    ['Activity Date', 'Distance'],
+    [
+      ['2026-10-15 06:32:10', '6.2'],
+      ['2026-10-14 06:32:10', '7.02'],
+      ['2026-10-13 06:32:10', '5.0'],
+      ['2026-10-12 06:32:10', '250'],
+    ],
+  );
+  check(
+    'issue #37 (f): km-kolonne med én tur over 200 km er stadig km for alle rækker',
+    kmWithLongRide.distances,
+    (v) => JSON.stringify(v) === JSON.stringify([6200, 7020, 5000, 250_000]),
+  );
+  const headerBeatsEmptyUnit = distanceTable(
+    ['Activity Date', 'Distance (m)', 'Distance Unit'],
+    [
+      ['2026-10-13 06:32:10', '150', ''],
+      ['2026-10-12 06:32:10', '180', ''],
+    ],
+  );
+  check(
+    'issue #37 (g): header-enhed slår skala-gæt når enhedskolonnen er tom',
+    headerBeatsEmptyUnit.distances,
+    (v) => JSON.stringify(v) === JSON.stringify([150, 180]),
+  );
+  check('issue #37 (g): header-enhed med ubrugelig enhedskolonne markerer ikke en antagelse', headerBeatsEmptyUnit.stats.distanceUnitAssumed, (v) => v === false);
+  const headerBeatsContradictoryUnit = distanceTable(
+    ['Activity Date', 'Distance (m)', 'Distance Unit'],
+    [
+      ['2026-10-13 06:32:10', '150', 'm'],
+      ['2026-10-12 06:32:10', '180', 'km'],
+    ],
+  );
+  check(
+    'issue #37 (g): header-enhed slår skala-gæt når enhedskolonnen er selvmodsigende',
+    headerBeatsContradictoryUnit.distances,
+    (v) => JSON.stringify(v) === JSON.stringify([150, 180]),
+  );
+  check('issue #37 (ekstra): Distance (mi) omregnes til meter', oneDistance('Distance (mi)', '1'), (v) =>
+    JSON.stringify(v) === JSON.stringify([1609.344]),
+  );
+  check('issue #37 (ekstra): Distance (mil) er 10 km i da/sv/no', oneDistance('Distance (mil)', '1'), (v) =>
+    JSON.stringify(v) === JSON.stringify([10_000]),
+  );
+
+  const ambiguousUnit = distanceTable(
+    ['Activity Date', 'Distance', 'Distance Unit'],
+    [
+      ['2026-10-13 06:32:10', '150', 'm'],
+      ['2026-10-12 06:32:10', '5000', 'km'],
+    ],
+  );
+  check('issue #37: tom/selvmodsigende enhedskolonne falder tilbage til kolonne-skala', ambiguousUnit.distances, (v) =>
+    JSON.stringify(v) === JSON.stringify([150, 5000]),
+  );
+  check('issue #37: falder tilbage til kolonne-skala markerer antagelsen', ambiguousUnit.stats.distanceUnitAssumed, (v) => v === true);
+  const emptyUnit = distanceTable(
+    ['Activity Date', 'Distance', 'Distance Unit'],
+    [
+      ['2026-10-13 06:32:10', '150', ''],
+      ['2026-10-12 06:32:10', '5000', ''],
+    ],
+  );
+  check('issue #37: tom enhedskolonne falder tilbage til kolonne-skala', emptyUnit.distances, (v) =>
+    JSON.stringify(v) === JSON.stringify([150, 5000]),
+  );
+  check('issue #37: tom enhedskolonne markerer antagelsen', emptyUnit.stats.distanceUnitAssumed, (v) => v === true);
+  const distanceNoteDir = scratch('distance-note');
+  writeFileSync(
+    join(distanceNoteDir, 'activities.csv'),
+    [
+      'Activity Date,Activity Type,Distance,Distance Unit',
+      '"2026-10-13 06:32:10","Løb","150","m"',
+      '"2026-10-12 06:32:10","Løb","5000","km"',
+    ].join('\n') + '\n',
+  );
+  const distanceNoteOut = runCli([distanceNoteDir], { encoding: 'utf8' });
+  check('issue #37: antagelsen får én engelsk note gennem note-systemet', distanceNoteOut, (v) =>
+    /distance unit column is empty or contradictory.*median above 200 means metres/i.test(v) &&
+    (v.match(/distance unit column/gi) ?? []).length === 1,
+  );
+  const distanceNoteJson = JSON.parse(runCli([distanceNoteDir, '--json'], { encoding: 'utf8' }));
+  const noteCount = (value) => (String(value ?? '').match(/distance unit column/gi) ?? []).length;
+  check('issue #37: JSON notes har noten præcis én gang', noteCount(distanceNoteJson.notes?.join(' ')), (v) => v === 1);
+  check('issue #37: JSON hostNote gentager ikke noten', noteCount(distanceNoteJson.hostNote), (v) => v === 0);
+  check('issue #37: JSON markdown har noten præcis én gang', noteCount(distanceNoteJson.markdown), (v) => v === 1);
+  check('issue #37: JSON har ikke et ekstra distanceNote-felt', Object.hasOwn(distanceNoteJson, 'distanceNote'), (v) => v === false);
+  const cleanDistanceDir = scratch('distance-clean');
+  writeFileSync(
+    join(cleanDistanceDir, 'activities.csv'),
+    ['Activity Date,Activity Type,Distance', '"2026-10-12 06:32:10","Løb","5,0"'].join('\n') + '\n',
+  );
+  const cleanDistanceOut = runCli([cleanDistanceDir], { encoding: 'utf8' });
+  check('issue #37: ren bar header får ingen ny note', /distance unit column/i.test(cleanDistanceOut), (v) => v === false);
+
   // 5) Baseline skal dække hele vinduet, ikke kun de løb der vises.
   const wide = renderMarkdown({
     sourceLabel: 'test',
