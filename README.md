@@ -218,11 +218,17 @@ kilometres. One very long ride therefore cannot flip a kilometre column to
 metres. An explicit unit always beats that guess: a unit in the header, such as
 `Distance (km)`, or a usable unit column wins. If the unit column is empty or
 contradictory, the header unit still wins; only when neither names a unit does
-the tool fall back to the column's median.
+the tool fall back to the column's median. The guess can be wrong at either
+extreme: a metre export whose values are all 200 or below is read as
+kilometres, and a kilometre export whose values are all above 200 is read as
+metres.
 
-**Zones.** `Z1`–`Z5` are 50–100 % of max heart rate. Strava's export does not
-contain the watch's own zone configuration, so without `--max-hr` the tool
-falls back to a robust observed value: the 95th percentile (p95) of the
+**Zones.** `Z1`–`Z5` are 50–100 % of max heart rate. `--max-hr` wins over
+everything; otherwise the tool uses what the watch wrote into the track file:
+its max heart rate is always kept, and its four boundaries are used when the
+file carries four, and derived from that max heart rate when it does not.
+Where a file carries no zone data — the usual case in a Strava export — the
+tool falls back to a robust observed value: the 95th percentile (p95) of the
 `Max Heart Rate` values from the two years before the newest activity. The
 header says `source=export-p95`, and the notes state the value, the number of
 observations it rests on, and the window start. With fewer than 21 values
@@ -292,7 +298,7 @@ MIT — see [LICENSE](LICENSE).
 
 There are two, and they mean different things.
 
-**The package version** (`1.0.4`) is the tool: the commands, the flags, the
+**The package version** (`1.0.5`) is the tool: the commands, the flags, the
 exit codes. It follows semver, so 1.x will not break your command line.
 
 **The agent format version** (`STRAVA DIGEST v2`, in the first line of the

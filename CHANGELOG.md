@@ -4,7 +4,43 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.5] — 2026-10-31
+
+### Changed
+
+- Without `--max-hr`, the zone basis is now the 95th percentile of the
+  `Max Heart Rate` values from the two years before the newest activity,
+  not a single spike. The header says `source=export-p95`; with fewer than
+  21 values the basis is the highest measured value in the window instead,
+  the header says `source=export-max`, and the note states the count. This
+  is a deliberate behaviour change: on an export like the real one the basis
+  moves from 199 to 186, so the zone split and `load` move with it. A wrong
+  max HR mislabels every zone, so pass `--max-hr` if you know your max (#38).
+- The distance unit is no longer decided per row from a value threshold. A
+  usable unit column beats the header unit, the header unit beats the guess,
+  and a bare `Distance` header is decided once for the whole column from its
+  median (above 200 means metres, otherwise kilometres). A deliberate
+  behaviour change: the digest shows the same unit for every row in a column
+  and no longer flips when a single value crosses the threshold (#37).
+
+### Fixed
+
+- `--list` and the loose-file path now say why a file was skipped, and an
+  unreadable `activities.` file is reported instead of looking like a
+  missing file (#41).
+- The Markdown baseline uses the same heart-rate rule as the run lines
+  (`row.avgHr ?? analysis.avgHr`), so the MD average cannot contradict the
+  lines it sums (#43).
+- `SKILL.md` no longer promises that the digest tells you when the context
+  file is missing, and the size message can no longer sound as if a file is
+  exactly the limit while it is larger (#44).
+- The last ten Danish user-facing strings are now English (#45).
+- Reading points from a GPX/TCX file scans the buffer once; a truncated file
+  no longer rescans the rest from every position (it was O(n²)). Well-formed
+  input is unchanged line for line (#40).
+- The test suite is isolated from the user's own machine: working directory,
+  a temporary `HOME`, and temporary directories are cleaned up. Developer
+  facing; no user-visible change (#42).
 
 ## [1.0.4] — 2026-10-30
 
@@ -79,8 +115,7 @@ All notable changes to this project are documented here. The format follows
   export columns no longer claims they are all weather and gear: it says how
   many populated columns the tool could not place, and that some may be
   training data.
-- Reading a FIT file or resolving an archive entry no longer scales
-  quadratically, and `Math.max`/`Math.min` over a whole array is gone, so a
+- `Math.max`/`Math.min` over a whole array is gone, so a
   large export cannot abort the run with a stack overflow. `formatMb` rounds
   to one decimal instead of always rounding up, and the 'too large' message
   reports the declared size when it is known and 'more than the limit' when it
