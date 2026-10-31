@@ -108,6 +108,8 @@ const ALIASES: Record<Field, string[]> = {
     'distanse',
     'afstand km',
     'distancia',
+    'distanza',
+    'distans',
   ],
   avgHr: [
     'average heart rate',
@@ -303,7 +305,11 @@ export function raw(row: string[], map: ColumnMap, field: Field): string {
 }
 
 export function num(row: string[], map: ColumnMap, field: Field): number | null {
-  const v = raw(row, map, field).replace(/[^\d.,-]/g, '').replace(/\s/g, '');
+  return parseNumber(raw(row, map, field));
+}
+
+function parseNumber(value: string): number | null {
+  const v = value.replace(/[^\d.,-]/g, '').replace(/\s/g, '');
   if (!v) return null;
   // Per-value rule, not per account locale: num() receives no locale. When
   // both "," and "." appear, the rightmost is the decimal separator, so
@@ -629,9 +635,215 @@ function build(
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Distance arrives in km in current exports and in metres in some older ones. */
-export function distanceMeters(row: string[], map: ColumnMap): number | null {
-  const n = num(row, map, 'distance');
-  if (n == null) return null;
-  return n > 200 ? n : n * 1000;
+type DistanceUnit = 'm' | 'km' | 'mi' | 'scandi-mil';
+
+const UNIT_FACTOR: Record<DistanceUnit, number> = {
+  m: 1,
+  km: 1000,
+  mi: 1609.344,
+  // Danish, Swedish and Norwegian "mil" is 10 km, not a mile.
+  'scandi-mil': 10_000,
+};
+
+const UNIT_WORDS: Record<string, DistanceUnit> = {
+  m: 'm',
+  meter: 'm',
+  meters: 'm',
+  metre: 'm',
+  metres: 'm',
+  metro: 'm',
+  metros: 'm',
+  metri: 'm',
+  km: 'km',
+  kilometer: 'km',
+  kilometers: 'km',
+  kilometre: 'km',
+  kilometres: 'km',
+  kilometro: 'km',
+  kilometros: 'km',
+  quilometro: 'km',
+  quilometros: 'km',
+  chilometri: 'km',
+  chilometro: 'km',
+  mil: 'scandi-mil',
+  mi: 'mi',
+  mile: 'mi',
+  miles: 'mi',
+  milla: 'mi',
+  millas: 'mi',
+  milha: 'mi',
+  milhas: 'mi',
+  mijl: 'mi',
+  mijlen: 'mi',
+  meile: 'mi',
+  meilen: 'mi',
+  miglio: 'mi',
+  miglia: 'mi',
+};
+
+/** A standalone unit column names its purpose; a temperature unit does not. */
+const UNIT_HEADER_WORDS = new Set([
+  'unit',
+  'units',
+  'enhed',
+  'enheder',
+  'einheit',
+  'einheiten',
+  'enhet',
+  'enheter',
+  'eenheid',
+  'eenheden',
+  'unidad',
+  'unidades',
+  'unite',
+  'unites',
+  'unidade',
+  'unita',
+  'unitat',
+  'distanceunit',
+  'distanceunits',
+  'distancenhed',
+  'afstandsenhed',
+  'distanseenhed',
+  'distanzeinheit',
+]);
+
+// Derived from ALIASES.distance so a language is added in one place. Unit
+// tokens ("km") are removed: they belong to UNIT_WORDS, not to the header
+// words that name a distance column.
+const DISTANCE_HEADER_WORDS = new Set(
+  ALIASES.distance.flatMap((alias) => headerTokens(alias)).filter((token) => !UNIT_WORDS[token]),
+);
+
+/** lowercase, strip accents and split into alphanumeric words */
+function headerTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/æ/g, 'ae')
+    .replace(/ø/g, 'o')
+    .replace(/å/g, 'a')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function distanceUnitOf(value: string): DistanceUnit | null {
+  let unit: DistanceUnit | null = null;
+  for (const token of headerTokens(value)) {
+    const found = UNIT_WORDS[token];
+    if (!found) continue;
+    if (unit && unit !== found) return null;
+    unit = found;
+  }
+  return unit;
+}
+
+function isDistanceUnitHeader(header: string): boolean {
+  const tokens = headerTokens(header);
+  if (!tokens.some((token) => UNIT_HEADER_WORDS.has(token))) return false;
+  const rest = tokens.filter(
+    (token) => !UNIT_HEADER_WORDS.has(token) && !['of', 'for', 'i', 'in', 'pa', 'per', 'til'].includes(token),
+  );
+  return rest.length === 0 || rest.some((token) => DISTANCE_HEADER_WORDS.has(token));
+}
+
+export interface DistanceUnits {
+  /** metres per unit for one distance column */
+  factorAt(columnIndex: number): number;
+  /**
+   * true when the unit could only be guessed from the column's scale, after a
+   * unit column existed but was empty or contradictory and the header named
+   * no unit
+   */
+  assumed: boolean;
+}
+
+/**
+ * Decide the distance unit once per column, never per row. Precedence:
+ * a usable standalone unit column, then a unit in the header, then the
+ * column's scale. A unit column that is empty or contradictory is unusable,
+ * so the explicit header unit wins over the guess; only a bare header falls
+ * through to the scale.
+ */
+export function distanceUnits(table: CsvTable, map: ColumnMap): DistanceUnits {
+  const distanceIndexes = map.index.get('distance') ?? [];
+  const hasDistanceValue = distanceIndexes.some((index) =>
+    table.rows.some((row) => (row[index] ?? '').trim() !== ''),
+  );
+  if (!distanceIndexes.length || !hasDistanceValue) {
+    return { factorAt: () => 1000, assumed: false };
+  }
+
+  const unitIndexes = table.headers
+    .map((header, index) => (isDistanceUnitHeader(header) ? index : -1))
+    .filter((index) => index >= 0);
+
+  let columnUnit: DistanceUnit | null = null;
+  let unitColumnUnusable = false;
+  if (unitIndexes.length) {
+    const seen = new Set<DistanceUnit>();
+    let unreadable = false;
+    for (const row of table.rows) {
+      for (const index of unitIndexes) {
+        const value = (row[index] ?? '').trim();
+        if (!value) continue;
+        const unit = distanceUnitOf(value);
+        if (!unit) unreadable = true;
+        else seen.add(unit);
+      }
+    }
+    if (!unreadable && seen.size === 1) columnUnit = [...seen][0]!;
+    else unitColumnUnusable = true;
+  }
+
+  const factors = new Map<number, number>();
+  let usedScale = false;
+  for (const index of distanceIndexes) {
+    if (columnUnit) {
+      factors.set(index, UNIT_FACTOR[columnUnit]);
+      continue;
+    }
+    const headerUnit = distanceUnitOf(table.headers[index] ?? '');
+    if (headerUnit) {
+      factors.set(index, UNIT_FACTOR[headerUnit]);
+      continue;
+    }
+    factors.set(index, columnScaleFactor(table, index));
+    usedScale = true;
+  }
+
+  return { factorAt: (index) => factors.get(index) ?? 1000, assumed: usedScale && unitColumnUnusable };
+}
+
+/** Median of the column's non-empty numeric values. */
+function columnScaleFactor(table: CsvTable, index: number): number {
+  const values: number[] = [];
+  for (const row of table.rows) {
+    const value = parseNumber((row[index] ?? '').trim());
+    if (value != null) values.push(value);
+  }
+  if (!values.length) return 1000;
+  values.sort((a, b) => a - b);
+  const middle = Math.floor(values.length / 2);
+  const median =
+    values.length % 2 === 0 ? (values[middle - 1]! + values[middle]!) / 2 : values[middle]!;
+  return median > 200 ? 1 : 1000;
+}
+
+/** Distance in metres, using the unit decided once for the column. */
+export function distanceMeters(
+  row: string[],
+  map: ColumnMap,
+  units: DistanceUnits,
+): number | null {
+  for (const index of map.index.get('distance') ?? []) {
+    const value = row[index];
+    if (value == null || value.trim() === '') continue;
+    const n = parseNumber(value.trim());
+    return n == null ? null : n * units.factorAt(index);
+  }
+  return null;
 }

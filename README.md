@@ -211,6 +211,15 @@ to see up to 12 of their header names, so a new alias is one line.
 
 ## Notes on the data
 
+**Distance units.** A bare `Distance` header does not say whether the column is
+kilometres or metres, so the tool decides it once for the whole column from the
+column's robust central value: a median above 200 means metres, otherwise
+kilometres. One very long ride therefore cannot flip a kilometre column to
+metres. An explicit unit always beats that guess: a unit in the header, such as
+`Distance (km)`, or a usable unit column wins. If the unit column is empty or
+contradictory, the header unit still wins; only when neither names a unit does
+the tool fall back to the column's median.
+
 **Zones.** `Z1`–`Z5` are 50–100 % of max heart rate. Strava's export does not
 contain the watch's own zone configuration, so without `--max-hr` the tool
 falls back to the highest heart rate it observed in the export, and says so in

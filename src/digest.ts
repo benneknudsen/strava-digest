@@ -24,6 +24,8 @@ export interface DigestInput {
   generatedAt: Date;
   poolLabel: string;
   hostNote?: string;
+  /** note about a guessed distance unit, added to Markdown's Notes section */
+  distanceNote?: string;
   /** hjælpetekst når zonekonfigurationen mangler, fx et observeret puls-maks */
   zoneHint?: string;
   /** antal løb i eksportens pulje (kan være mere end runs.length) */
@@ -132,6 +134,7 @@ export function renderMarkdown(input: DigestInput): string {
     );
   }
   if (input.hostNote) notes.push(input.hostNote);
+  if (input.distanceNote) notes.push(input.distanceNote);
   if (notes.length) {
     out.push('');
     out.push('## Notes');
