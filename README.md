@@ -105,19 +105,19 @@ Real output from the repo's synthetic fixture (trimmed to two runs):
 ```
 # STRAVA DIGEST v2 (agent-format)
 runs_in_export=3
-max_hr=181 source=export-observation
+max_hr=181 source=export-max
 
 ## WEEKS (newest first)
-w=2026-W42 r=1 km=10.0 t=3360 load=218 hr=156 without_analysis=0
-w=2026-W41 r=2 km=14.0 t=4325 load=259 hr=153 without_analysis=0
+w=2026-W42 r=1 km=10.0 t=3360 load=226 hr=156 without_analysis=0
+w=2026-W41 r=2 km=14.0 t=4325 load=260 hr=153 without_analysis=0
 
 ## WINDOW (last 28 days vs. the 28 days before)
-recent: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=477 z=0.0,0.0,41.4,35.4,23.2 without_analysis=0
+recent: n=3 km=24.0 t=7685 pace=320.2 hr=154 load=486 z=0.0,0.0,37.5,35.8,26.7 without_analysis=0
 previous: n=0 km=- t=- pace=- hr=- load=- z=- without_analysis=0
 
 ## RUNS (3, newest first)
-d=2026-10-12T06:32:10.000Z n="Long run" km=10.00 t=3360 pace=336.0 hr=156/174 z=0.0,0.0,11.1,67.9,21.0 elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=218 sp=1:329@144,2:327@145,…
-d=2026-10-09T06:05:00.000Z n="Tempo run" km=6.00 t=1580 pace=263.3 hr=168/181 z=0.0,0.0,0.0,31.4,68.6 elev=0 drift=3.9 half=-2.0 cv=0.4 pause=0 load=122 sp=1:262@160,2:261@161,…
+d=2026-10-12T06:32:10.000Z n="Long run" km=10.00 t=3360 pace=336.0 hr=156/174 z=0.0,0.0,2.0,70.5,27.5 elev=0 drift=4.4 half=-11.0 cv=1.8 pause=0 load=226 sp=1:329@144,2:327@145,…
+d=2026-10-09T06:05:00.000Z n="Tempo run" km=6.00 t=1580 pace=263.3 hr=168/181 z=0.0,0.0,0.0,27.9,72.1 elev=0 drift=3.9 half=-2.0 cv=0.4 pause=0 load=123 sp=1:262@160,2:261@161,…
 ```
 
 One machine-readable line per run, with every field. The `SCHEMA` section says
@@ -222,9 +222,14 @@ the tool fall back to the column's median.
 
 **Zones.** `Z1`–`Z5` are 50–100 % of max heart rate. Strava's export does not
 contain the watch's own zone configuration, so without `--max-hr` the tool
-falls back to the highest heart rate it observed in the export, and says so in
-the header (`source=export-observation`) and in the notes. A wrong max HR
-mislabels every zone, so pass `--max-hr <your max>` if you know it.
+falls back to a robust observed value: the 95th percentile (p95) of the
+`Max Heart Rate` values from the two years before the newest activity. The
+header says `source=export-p95`, and the notes state the value, the number of
+observations it rests on, and the window start. With fewer than 21 values
+the basis is the highest measured value in the window instead, the header says
+`source=export-max`, and the note says so. A p95 is less spike-sensitive than
+a raw maximum, but it is still an observation, not a tested max; a wrong max
+HR mislabels every zone, so pass `--max-hr <your max>` if you know it.
 
 **Localised exports.** The same column arrives as `Average Heart Rate` or
 `Gennemsnitlig puls`, the date as `Oct 12, 2026` or `12. okt. 2026`, and the

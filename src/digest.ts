@@ -33,13 +33,13 @@ export interface DigestInput {
   /** max-puls brugt til zonefordelingen */
   maxHr?: number | null;
   /** hvor max-pulsen kom fra */
-  maxHrSource?: 'flag' | 'fit' | 'export-observation' | null;
+  maxHrSource?: 'flag' | 'fit' | 'export-p95' | 'export-max' | null;
   /** noter til agenten (udeladte felter, forbehold) */
   notes?: string[];
 }
 
-const num = (v: number | null | undefined, digits = 0, fallback = '–'): string =>
-  v == null || !Number.isFinite(v) ? fallback : v.toFixed(digits);
+const num = (v: number | null | undefined, digits = 0): string =>
+  v == null || !Number.isFinite(v) ? '–' : v.toFixed(digits);
 
 /** Percent: dot as decimal separator, no decimals when the number is whole. */
 const fmtPct = (v: number): string => {
@@ -135,6 +135,15 @@ export function renderMarkdown(input: DigestInput): string {
   }
   if (input.hostNote) notes.push(input.hostNote);
   if (input.distanceNote) notes.push(input.distanceNote);
+  // `notes` er den kanoniske liste til agent- og JSON-formatet. Markdown
+  // bygger nogle af de samme oplysninger op selv, så kun noter der reelt
+  // mangler, tilføjes — ellers ville grundlaget for max-pulsen aldrig nå
+  // Markdown, mens de øvrige noter stod to gange.
+  for (const note of input.notes ?? []) {
+    if (!notes.some((existing) => existing.includes(note) || note.includes(existing))) {
+      notes.push(note);
+    }
+  }
   if (notes.length) {
     out.push('');
     out.push('## Notes');
@@ -216,9 +225,11 @@ function renderRun(run: DigestedRun, index: number, zoneHint?: string): string[]
       const source =
         analysis.zoneSource === 'fit'
           ? 'from the watch'
-          : analysis.zoneSource === 'export-observation'
-            ? 'observed in the export, not --max-hr'
-            : 'from --max-hr';
+          : analysis.zoneSource === 'export-p95'
+            ? 'the 95th percentile in the export, not --max-hr'
+            : analysis.zoneSource === 'export-max'
+              ? 'the highest measured value in the export, not --max-hr'
+              : 'from --max-hr';
       lines.push(
         `- **Zones:** ${zoneLine(analysis.zonePct)} (max HR ${num(analysis.zoneMaxHr)}, ${source})`,
       );
@@ -262,7 +273,7 @@ function windowZoneSummary(
     if (!zones) continue;
     runsWithZones += 1;
     zones.forEach((s, i) => {
-      buckets[i] = (buckets[i] ?? 0) + s;
+      buckets[i]! += s;
     });
   }
   return runsWithZones ? { seconds: buckets, runsWithZones, runsInWindow } : null;

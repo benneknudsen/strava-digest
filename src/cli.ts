@@ -14,7 +14,7 @@ import { collectActivityFiles, firstValidPoint, isActivityFile, MIN_TRACK_POINTS
 import { maxValue } from './minmax.ts';
 import { type ExportSource, findActivitiesCsv, openSource, readFileLimited, resolveActivityEntry } from './source.ts';
 import { type ActivityRow, type ActivityStats, parseActivities } from './strava.ts';
-import { resolveZoneConfig } from './zones.ts';
+import { MIN_P95_VALUES, resolveZoneConfig } from './zones.ts';
 
 interface Args {
   input: string;
@@ -231,9 +231,10 @@ async function runBulk(
     return 1;
   }
 
-  // Den højeste puls i eksporten bruges som zone-fallback, så den skal
-  // ligge FØR analysen — ellers ville turene blive analyseret uden zoner.
-  const observedMaxHr = observedMaxHeartRate(activities, stats.maxHrOfSkipped);
+  // p95-grundlaget bruges som zone-fallback, så det skal ligge FØR
+  // analysen — ellers ville turene blive analyseret uden zoner.
+  const observedMax = observedMaxHeartRate(activities);
+  const observedMaxHr = observedMax?.maxHr ?? null;
 
   // Alle løb i pool'en analyseres én gang, og resultaterne genbruges til
   // både digesten og baseline. At analysere to gange ville double-parse
@@ -276,7 +277,10 @@ async function runBulk(
       const track = parseActivityBuffer(entry, buf);
       analysed.push({
         row,
-        analysis: analyseRun(track, resolveZoneConfig(args.maxHr, track.zones, observedMaxHr)),
+        analysis: analyseRun(
+          track,
+          resolveZoneConfig(args.maxHr, track.zones, observedMaxHr, observedMax?.source),
+        ),
       });
     } catch (err) {
       analysed.push({ row, analysis: null, error: err instanceof Error ? err.message : String(err) });
@@ -298,8 +302,8 @@ async function runBulk(
 
   const contextText = await readContext(args.context, args.contextExplicit);
   const usesObservedMaxHr = args.maxHr == null && observedMaxHr != null;
-  const zoneSource: 'flag' | 'fit' | 'export-observation' | null =
-    args.maxHr != null ? 'flag' : usesObservedMaxHr ? 'export-observation' : null;
+  const zoneSource: 'flag' | 'fit' | 'export-p95' | 'export-max' | null =
+    args.maxHr != null ? 'flag' : usesObservedMaxHr && observedMax ? observedMax.source : null;
   const noFilenameInPool = pool.filter((row) => !row.filename).length;
   const coverage = coverageNotes(stats, noFilenameInPool);
   const distanceNote = distanceUnitNote(stats);
@@ -335,15 +339,15 @@ async function runBulk(
               'data. Run with --format md to list their names; a missing alias is one line.',
           ]
         : []),
-      ...(usesObservedMaxHr
+      ...(usesObservedMaxHr && observedMax
         ? [
-            `max_hr=${observedMaxHr} is the highest Max Heart Rate value in the activities CSV (observed), not your watch's own max HR; heart-rate samples in the track files are not scanned. ` +
+            `max_hr=${observedMaxHr} is ${observedBasisText(observedMax)}, not your watch's own max HR; heart-rate samples in the track files are not scanned. ` +
               "Strava's bulk export does not contain the watch's zone configuration, so the zone boundaries are a best guess.",
           ]
         : []),
     ],
-    zoneHint: usesObservedMaxHr
-      ? `zones use the highest Max Heart Rate value in the activities CSV (${observedMaxHr}) — it is observed, not your watch's max. Pass --max-hr <your max> to use your own.`
+    zoneHint: usesObservedMaxHr && observedMax
+      ? `zones use ${observedBasisText(observedMax)} (${observedMaxHr}) — pass --max-hr <your max> to use your own.`
       : undefined,
     hostNote: hostNotes.length ? hostNotes.join(' ') : undefined,
   };
@@ -644,30 +648,62 @@ async function readContext(path: string, warn = false): Promise<string> {
   }
 }
 
+interface ObservedMaxHr {
+  maxHr: number;
+  /** antal Max Heart Rate-værdier i toårsvinduet */
+  count: number;
+  /** vinduets start: to år før den nyeste aktivitet */
+  from: Date;
+  /** hvilket grundlag maxHr er: p95 eller den højeste målte værdi */
+  source: 'export-p95' | 'export-max';
+}
+
 /**
- * Højeste puls der er observeret i eksporten. Det er ikke et zonegrundlag
- * — det er blot det bedste bud på brugerens max-puls, når urets egen
- * zonekonfiguration mangler i filerne. Vises som et forslag, aldrig som
- * en sandhed.
+ * Robust zonegrundlag fra eksportens egen `Max Heart Rate`-kolonne: p95 af
+ * værdierne i de to år før den nyeste aktivitet. Vinduet regnes fra den
+ * nyeste aktivitet, ikke fra i dag, så en gammel eksport giver samme svar i
+ * dag og om et år. Kræver mindst MIN_P95_VALUES; ellers er grundlaget den højeste
+ * målte værdi i vinduet, og `source=export-max` siger hvorfor.
  *
  * Rækker uden fil tæller med: de er en del af eksporten, og deres Max HR
  * står i CSV'en. Rækker der blev droppet for en manglende eller ufortolkbar
- * dato tæller også med, via `maxHrOfSkipped`; deres puls er stadig en
- * observation fra eksporten. At ekskludere nogen af dem ville gøre
- * "højeste puls i eksporten" usandt.
+ * dato kan ikke placeres i vinduet og tæller derfor ikke med.
  *
- * Formuleringen "the highest heart rate it observed in the export" står også i
- * README.md (Notes on the data → Zones). Denne funktion læser kun CSV-kolonnen
+ * Formuleringen om p95 står også i README.md (Notes on the data → Zones)
+ * og i agent-formatets SIGNALS. Denne funktion læser kun CSV-kolonnen
  * `Max Heart Rate` — puls-samples i spor-filerne scannes ikke. Hvis denne
- * definition ændres, skal README.md følge med i samme ændring.
+ * definition ændres, skal README.md og SIGNALS følge med.
  */
-function observedMaxHeartRate(
-  activities: ActivityRow[],
-  maxHrOfSkipped: number | null,
-): number | null {
-  const values = activities.map((a) => a.maxHr).filter((v): v is number => v != null && v > 0);
-  if (maxHrOfSkipped != null && maxHrOfSkipped > 0) values.push(maxHrOfSkipped);
-  return values.length ? maxValue(values) : null;
+function observedMaxHeartRate(activities: ActivityRow[]): ObservedMaxHr | null {
+  const newest = activities[0]?.date;
+  if (!newest) return null;
+  const from = new Date(newest);
+  from.setFullYear(from.getFullYear() - 2);
+  const values = activities
+    .filter((a) => a.date >= from && a.date <= newest && a.maxHr != null && a.maxHr > 0)
+    .map((a) => a.maxHr!);
+  if (!values.length) return null;
+  const maxHr = maxValue(values);
+  if (values.length < MIN_P95_VALUES) {
+    return { maxHr, count: values.length, from, source: 'export-max' };
+  }
+  // Type 7 (lineær interpolation): p95 = værdien ved indeks (n - 1) * 0,95.
+  // Det holder et enkelt spike uden for grundlaget, når der er nok værdier.
+  values.sort((a, b) => a - b);
+  const index = (values.length - 1) * 0.95;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  const p95 = values[lower]! + (index - lower) * (values[upper]! - values[lower]!);
+  return { maxHr: Math.round(p95), count: values.length, from, source: 'export-p95' };
+}
+
+function observedBasisText(observed: ObservedMaxHr): string {
+  const window = `observed in the export since ${observed.from.toISOString().slice(0, 10)} (two years back from the newest activity)`;
+  if (observed.source === 'export-max') {
+    const noun = observed.count === 1 ? 'value' : 'values';
+    return `the highest of ${observed.count} Max Heart Rate ${noun} ${window} — fewer than ${MIN_P95_VALUES} values, so it is the highest measured value, not a p95`;
+  }
+  return `the 95th percentile of ${observed.count} Max Heart Rate values ${window}`;
 }
 
 function parseMaxHr(value: string): number {

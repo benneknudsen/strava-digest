@@ -3,12 +3,26 @@ import { pauseMask } from './pauses.ts';
 
 export interface ZoneConfig {
   maxHr: number;
-  source: 'flag' | 'fit' | 'export-observation';
+  source: 'flag' | 'fit' | 'export-p95' | 'export-max';
   /** Øvre puls for Z1, Z2, Z3 og Z4 — fire interne skæringspunkter. */
   boundaries: number[];
 }
 
 export const ZONE_NAMES = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5'] as const;
+
+/**
+ * Mindste antal værdier før et p95-grundlag er meningsfuldt.
+ *
+ * Udledning (type 7, lineær interpolation): p95 ligger ved indeks
+ * (n − 1) · 0,95. Det højeste punkt har vægt 0 præcis når indekset ikke
+ * rækker ind i det sidste interval, altså når (n − 1) · 0,95 ≤ n − 2.
+ * Løses uligheden: 0,95n − 0,95 ≤ n − 2 ⇒ 1,05 ≤ 0,05n ⇒ n ≥ 21.
+ * Ved n = 20 er indekset 19 · 0,95 = 18,05, så 5 % af spikets afstand
+ * lækker ind i grundlaget; først ved n = 21 er indekset 20 · 0,95 = 19 (= n − 2),
+ * og grundlaget er den næsthøjeste observation uanset det højeste punkt.
+ * Derfor 21 — ikke et rundt tal, men den mindste n hvor ét spike vejer 0.
+ */
+export const MIN_P95_VALUES = 21;
 
 /**
  * Standardzonemodel i procent af max-puls: Z1 50–60, Z2 60–70, Z3 70–80,
@@ -28,6 +42,7 @@ export function resolveZoneConfig(
   explicitMaxHr: number | null | undefined,
   fitZone: { maxHr?: number; boundaries?: number[] } | null | undefined,
   fallbackMaxHr?: number | null,
+  fallbackSource: 'export-p95' | 'export-max' = 'export-p95',
 ): ZoneConfig | null {
   if (isPositive(explicitMaxHr)) {
     return { maxHr: explicitMaxHr, source: 'flag', boundaries: boundariesFromMaxHr(explicitMaxHr) };
@@ -39,13 +54,14 @@ export function resolveZoneConfig(
     const resolvedMaxHr = maxHr ?? Math.round(boundaries![3]! / 0.9);
     return { maxHr: resolvedMaxHr, source: 'fit', boundaries: boundaries ?? boundariesFromMaxHr(resolvedMaxHr) };
   }
-  // Sidste udfald: den højeste puls i eksporten. Den er et gæt — ikke urets
-  // egen max-puls — men den er bedre end ingen zoner, og kilden står i
-  // headeren, så ingen agent kan læse den som en værdi der kom andet steds fra.
+  // Sidste udfald: et robust p95-grundlag fra eksporten (eller den højeste
+  // målte værdi, når der er under MIN_P95_VALUES). Det er et gæt — ikke urets egen
+  // max-puls — men det er bedre end ingen zoner, og kilden står i headeren,
+  // så ingen agent kan læse den som en værdi der kom andet steds fra.
   if (isPositive(fallbackMaxHr)) {
     return {
       maxHr: fallbackMaxHr,
-      source: 'export-observation',
+      source: fallbackSource,
       boundaries: boundariesFromMaxHr(fallbackMaxHr),
     };
   }
