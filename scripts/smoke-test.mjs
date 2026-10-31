@@ -853,8 +853,21 @@ try {
   check('dropped rows: --list shows the manual activity without a file', gapsList, (v) =>
     /\(no file\)/.test(v),
   );
-  check('dropped rows: --list names the skipped rows', gapsList, (v) =>
-    /^Skipped: 2 rows with a missing or unparsable date\.$/m.test(v),
+  check('dropped rows: --list names the skipped rows without digest wording', gapsList, (v) =>
+    /^2 rows were skipped because of a missing or unparsable date \(1 of them was also without a file name\)\.$/m.test(v) &&
+    !v.includes('not in the digest'),
+  );
+  check('dropped rows: --list notes the row without a file name', gapsList, (v) =>
+    /^1 row has no file name, so it has no track analysis; its distance and time come from the CSV\.$/m.test(v),
+  );
+
+  const oneRowDir = writeExport('one-row', [
+    '1,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
+  ]);
+  copyGoodGpx(oneRowDir);
+  const oneRowList = execFileSync('node', ['src/cli.ts', oneRowDir, '--list'], { encoding: 'utf8' });
+  check('bulk --list: one activity uses the singular label', oneRowList, (v) =>
+    /^1 activity in total \(shown: 1\)$/m.test(v),
   );
 
   const gapsMd = execFileSync('node', ['src/cli.ts', gapsDir, '--format', 'md'], { encoding: 'utf8' });
@@ -1158,6 +1171,12 @@ try {
 
   const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
   check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zones: no'));
+  check('loose --list: host note says names come from the file names', looseList, (v) =>
+    v.includes('Without activities.csv') && v.includes('uses the file names'),
+  );
+  check('loose --list: skipped files use the digest wording', looseList, (v) =>
+    v.includes('1 file skipped: UdenTid.gpx (no usable time).'),
+  );
 
   // issue #21 punkt 7: løse filer skal normalisere typen som bulk-vejen.
   const looseTypeDir = mkdtempSync(join(tmpdir(), 'strava-digest-loose-types-'));
@@ -1278,6 +1297,45 @@ try {
   writeFileSync(join(enkeltRoot, 'Enkelt.gpx'), onePointXml);
   const enkeltList = execFileSync('node', ['src/cli.ts', enkeltRoot, '--list'], { encoding: 'utf8' });
   check('loose --list: énpunktsfil sprunget over med grund', enkeltList, (v) => v.includes('Enkelt.gpx') && v.includes('(skipped)') && v.includes('only 1 point'));
+  check('loose --list: one file uses the singular label', enkeltList, (v) =>
+    /^1 activity file in total \(shown: 1\)$/m.test(v),
+  );
+
+  const allSkippedDir = scratch('all-skipped');
+  writeFileSync(join(allSkippedDir, 'tur.gpx'), onePointXml);
+  copyFileSync(join(looseDir, 'UdenTid.gpx'), join(allSkippedDir, 'tur2.gpx'));
+  let allSkippedErr = null;
+  try {
+    execFileSync('node', ['src/cli.ts', allSkippedDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    allSkippedErr = err;
+  }
+  check('loose: when every file was skipped, stderr says so', String(allSkippedErr?.stderr ?? ''), (v) =>
+    /^No runs found in the activity files\. All 2 files were skipped: tur\.gpx \(only 1 point\), tur2\.gpx \(no usable time\)\.$/m.test(v),
+  );
+
+  let oneSkippedErr = null;
+  try {
+    execFileSync('node', ['src/cli.ts', enkeltRoot], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    oneSkippedErr = err;
+  }
+  check('loose: the only skipped file uses the singular wording', String(oneSkippedErr?.stderr ?? ''), (v) =>
+    /^No runs found in the activity files\. The only file was skipped: Enkelt\.gpx \(only 1 point\)\.$/m.test(v),
+  );
+
+  const noRunDir = scratch('no-run');
+  writeFileSync(join(noRunDir, 'Cykling.gpx'), typedXml('Cykling', '02'));
+  writeFileSync(join(noRunDir, 'tur.gpx'), onePointXml);
+  let noRunErr = null;
+  try {
+    execFileSync('node', ['src/cli.ts', noRunDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    noRunErr = err;
+  }
+  check('loose: readable files without runs keep the --all hint', String(noRunErr?.stderr ?? ''), (v) =>
+    /^No runs found in the activity files \(try --all\)\. 1 file skipped: tur\.gpx \(only 1 point\)\.$/m.test(v),
+  );
 
   let looseErr = null;
   try {
@@ -1925,6 +1983,7 @@ try {
     read: async () => Buffer.alloc(0),
     size: async () => 0,
     warnings: () => [],
+    hasSkippedActivitiesCsv: () => false,
     close: async () => {},
   });
   const stubEntries = ['export/activities.csv'];
@@ -2687,6 +2746,56 @@ try {
   );
   check('zip: unsafe entry name is not leaked into the digest', badNameRun.stdout, (v) =>
     !v.includes('evil.fit'),
+  );
+
+  const badNameList = runZipCli([badName, '--list']);
+  check('zip: --list reports the skipped entry', badNameList.stdout, (v) =>
+    v.includes(skippedNote(1)),
+  );
+
+  const skippedCsvZip = writeZip(
+    'zip-skipped-csv',
+    buildZip([
+      { name: 'activities/../activities.csv', data: 'Activity ID\n' },
+      { name: 'activities/tur.gpx', data: readFileSync(join(tmp, 'activities', 'Run-1001.gpx')) },
+    ]),
+  );
+  const skippedCsvRun = runZipCli([skippedCsvZip]);
+  check('zip: a skipped activities.csv is not reported as missing', skippedCsvRun.stderr, (v) =>
+    v.includes('Found an activities.csv in') &&
+    v.includes('but it was skipped') &&
+    v.includes(skippedNote(1)) &&
+    !v.includes('Could not find activities.csv'),
+  );
+  check('zip: the label counts safe files only', skippedCsvRun.stderr, (v) =>
+    v.includes('(zip, 1 file)') && !v.includes('skipped)'),
+  );
+
+  const skippedOtherZip = writeZip(
+    'zip-skipped-other',
+    buildZip([
+      { name: 'activities/../notes.txt', data: 'x' },
+      { name: 'activities/tur.gpx', data: readFileSync(join(tmp, 'activities', 'Run-1001.gpx')) },
+    ]),
+  );
+  check('zip: the missing CSV and skipped entries are two facts', runZipCli([skippedOtherZip]).stderr, (v) =>
+    v.includes('Could not find activities.csv in') &&
+    v.includes(`. ${skippedNote(1)}`) &&
+    !v.includes('because entries in the archive were skipped') &&
+    v.includes('Is it a Strava bulk export?'),
+  );
+
+  const noCsvZip = writeZip(
+    'zip-no-csv',
+    buildZip([{ name: 'activities/tur.gpx', data: readFileSync(join(tmp, 'activities', 'Run-1001.gpx')) }]),
+  );
+  check('zip: an archive without activities.csv keeps the missing message', runZipCli([noCsvZip]).stderr, (v) =>
+    v.includes('Could not find activities.csv in') && v.includes('Is it a Strava bulk export?'),
+  );
+
+  const oneFileZip = writeZip('zip-one-file', buildZip([{ name: 'placeholder.txt', data: 'x' }]));
+  check('zip: one entry uses the singular label', runZipCli([oneFileZip]).stderr, (v) =>
+    v.includes('(zip, 1 file)') && !v.includes('(zip, 1 files)'),
   );
 
   const badNameJson = parseJson(runZipCli([badName, '--json']).stdout);

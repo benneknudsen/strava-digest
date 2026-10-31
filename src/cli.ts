@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { parseActivityBuffer, type Track } from './activity.ts';
 import { analyseRun } from './analysis.ts';
 import { isPlausibleDate, mapColumns } from './columns.ts';
@@ -120,11 +120,11 @@ async function main(): Promise<number> {
         await source.close();
       }
     }
-    const label = source.label;
+    const missingMessage = missingActivitiesCsvMessage(source);
     await source.close();
     const files = await collectActivityFiles(args.input);
     if (files.length) return runLoose(args, args.input, true, files);
-    console.error(`Could not find activities.csv in ${label}. Is it a Strava bulk export?`);
+    console.error(missingMessage);
     return 1;
   }
 
@@ -136,15 +136,24 @@ async function main(): Promise<number> {
   try {
     const found = findActivitiesCsv(source);
     if (!found) {
-      console.error(
-        `Could not find activities.csv in ${source.label}. Is it a Strava bulk export?`,
-      );
+      console.error(missingActivitiesCsvMessage(source));
       return 1;
     }
     return await runBulk(source, found, args);
   } finally {
     await source.close();
   }
+}
+
+function missingActivitiesCsvMessage(source: ExportSource): string {
+  const warnings = source.warnings();
+  if (source.hasSkippedActivitiesCsv()) {
+    return `Found an activities.csv in ${source.label}, but it was skipped: ${warnings.join(' ')}`;
+  }
+  if (warnings.length) {
+    return `Could not find activities.csv in ${source.label}. ${warnings.join(' ')} Is it a Strava bulk export?`;
+  }
+  return `Could not find activities.csv in ${source.label}. Is it a Strava bulk export?`;
 }
 
 /**
@@ -189,6 +198,7 @@ async function runBulk(
   const csv = parseCsv((await source.read(found.csv)).toString('utf8'));
   const map = mapColumns(csv);
   const { activities, stats } = parseActivities(csv, map);
+  const pool = args.all ? activities : activities.filter((a) => a.isRun);
 
   if (args.list) {
     for (const a of activities.slice(0, 400)) {
@@ -197,16 +207,16 @@ async function runBulk(
         `${a.date.toISOString().slice(0, 10)}  ${a.isRun ? 'RUN' : '   '}  ${a.type.padEnd(14)}  ${file}  zones: ${await zoneStatus(source, found.root, a.filename)}`,
       );
     }
-    console.log(`\n${stats.rowsInExport} activities in total (shown: ${Math.min(400, activities.length)})`);
-    const skipped = stats.skippedNoDate;
-    if (skipped) {
-      console.log(`\nSkipped: ${skipped} row${skipped === 1 ? '' : 's'} with a missing or unparsable date.`);
+    const total = stats.rowsInExport;
+    console.log(`\n${total} ${total === 1 ? 'activity' : 'activities'} in total (shown: ${Math.min(400, activities.length)})`);
+    const noFilenameInPool = pool.filter((row) => !row.filename).length;
+    for (const note of [...source.warnings(), ...coverageNotes(stats, noFilenameInPool, true)]) {
+      console.log(`\n${note}`);
     }
     if (map.unmatched.length) console.log(`\nUnmapped columns: ${map.unmatched.join(' · ')}`);
     return 0;
   }
 
-  const pool = args.all ? activities : activities.filter((a) => a.isRun);
   // I agent-formatet er standarden ALLE løb: en coach-agent skal kunne se
   // hele historikken, ellers kan den ikke finde tendenser. --last kan
   // stadig begrænse, og da er det et bevidst valg.
@@ -344,12 +354,12 @@ async function runBulk(
  * Each note has its own gate: a clean export gets no note, and a missing file
  * name is reported even when no row was dropped.
  */
-function coverageNotes(stats: ActivityStats, noFilenameInPool: number): string[] {
+function coverageNotes(stats: ActivityStats, noFilenameInPool: number, forList = false): string[] {
   const notes: string[] = [];
   const { skippedNoDate, skippedNoDateNoFilename } = stats;
   if (skippedNoDate > 0) {
     const singleRow = skippedNoDate === 1;
-    const skippedNote = `${skippedNoDate} ${singleRow ? 'row was' : 'rows were'} skipped because of a missing or unparsable date and ${singleRow ? 'is' : 'are'} not in the digest`;
+    const skippedNote = `${skippedNoDate} ${singleRow ? 'row was' : 'rows were'} skipped because of a missing or unparsable date${forList ? '' : ` and ${singleRow ? 'is' : 'are'} not in the digest`}`;
     const also =
       skippedNoDateNoFilename > 0
         ? ` (${skippedNoDateNoFilename} of them ${skippedNoDateNoFilename === 1 ? 'was' : 'were'} also without a file name)`
@@ -377,6 +387,14 @@ interface LooseEntry {
 
 const LOOSE_HOST_NOTE =
   'Without activities.csv the export gives no activity names, so the digest uses the file names. Relative Effort, gear and calories are omitted.';
+
+function skipReasons(skipped: LooseEntry[]): string {
+  return skipped.map((e) => `${basename(e.file)} (${e.reason})`).join(', ');
+}
+
+function skippedNoteOf(skipped: LooseEntry[]): string {
+  return `${skipped.length} file${skipped.length === 1 ? '' : 's'} skipped: ${skipReasons(skipped)}.`;
+}
 
 /**
  * Filer der ikke kan blive et pas: for få punkter, et første tidsstempel der er
@@ -433,9 +451,10 @@ async function runLoose(
         `${date}  ${e.run?.row.isRun ? 'RUN' : '   '}  ${type.padEnd(14)}  ${basename(e.file)}  zones: ${e.track?.zones ? 'yes' : 'no'}${e.run ? '' : '  (skipped)'}`,
       );
     }
-    console.log(`\n${files.length} activity files in total (shown: ${Math.min(400, files.length)})`);
+    console.log(`\n${files.length} activity ${files.length === 1 ? 'file' : 'files'} in total (shown: ${Math.min(400, files.length)})`);
+    console.log(`\n${LOOSE_HOST_NOTE}`);
     if (skipped.length) {
-      console.log(`\nSkipped: ${skipped.map((e) => `${basename(e.file)} (${e.reason})`).join(' · ')}`);
+      console.log(`\n${skippedNoteOf(skipped)}`);
     }
     return 0;
   }
@@ -445,21 +464,23 @@ async function runLoose(
   const limit = args.last > 0 ? args.last : pool.length;
   const chosen = pool.slice(0, limit);
   if (!chosen.length) {
+    const allSkipped = skipped.length === files.length;
     const skipNote = skipped.length
-      ? ` Skipped: ${skipped.map((e) => basename(e.file)).join(', ')}.`
+      ? allSkipped
+        ? skipped.length === 1
+          ? ` The only file was skipped: ${skipReasons(skipped)}.`
+          : ` All ${skipped.length} files were skipped: ${skipReasons(skipped)}.`
+        : ` ${skippedNoteOf(skipped)}`
       : '';
-    console.error(`No runs found in the activity files (try --all).${skipNote}`);
+    const headline = allSkipped
+      ? 'No runs found in the activity files.'
+      : 'No runs found in the activity files (try --all).';
+    console.error(`${headline}${skipNote}`);
     return 1;
   }
 
   const notes = [LOOSE_HOST_NOTE];
-  if (skipped.length) {
-    notes.push(
-      `${skipped.length} file${skipped.length === 1 ? '' : 's'} skipped: ${skipped
-        .map((e) => `${basename(e.file)} (${e.reason})`)
-        .join(', ')}.`,
-    );
-  }
+  if (skipped.length) notes.push(skippedNoteOf(skipped));
 
   const digestInput = {
     sourceLabel: isDir
