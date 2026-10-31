@@ -242,16 +242,34 @@ function toArray(v: unknown): any[] {
 
 function parseGpx(xml: string): Track {
   const points: TrackPoint[] = [];
-  const re = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) {
-    const attrs = m[1] ?? '';
+  // Lineær scanning i stedet for en lazy regex: regex'en prøvede fra hver
+  // efterfølgende position at finde `</trkpt>`, hvilket er O(n²) på en
+  // trunkeret fil. Mangler lukketagen, er der ingen flere punkter, så stop.
+  const openTag = '<trkpt';
+  const closeTag = '</trkpt>';
+  let pos = 0;
+  while (true) {
+    const open = xml.indexOf(openTag, pos);
+    if (open < 0) break;
+    const bodyStart = open + openTag.length;
+    // Samme tag-grænse som `\b` i den gamle regex: `<trkptx>` er ikke et punkt.
+    const afterTag = xml[bodyStart];
+    if (afterTag !== undefined && /[A-Za-z0-9_]/.test(afterTag)) {
+      pos = bodyStart;
+      continue;
+    }
+    const tagEnd = xml.indexOf('>', bodyStart);
+    if (tagEnd < 0) break;
+    const close = xml.indexOf(closeTag, tagEnd + 1);
+    if (close < 0) break;
+    const attrs = xml.slice(bodyStart, tagEnd);
     // Match the attribute boundary, not a word boundary: `\b` also matches at
     // `-`, so it would read `data-lat="99"` as `lat`.
     const lat = attrs.match(/(?:^|\s)lat="([-\d.]+)"/);
     const lon = attrs.match(/(?:^|\s)lon="([-\d.]+)"/);
+    pos = close + closeTag.length;
     if (!lat || !lon) continue;
-    const body = m[2] ?? '';
+    const body = xml.slice(tagEnd + 1, close);
     const time = body.match(/<time>([^<]+)<\/time>/);
     const ele = body.match(/<ele>([-\d.]+)<\/ele>/);
     const hr = body.match(/<(?:gpxtpx:)?hr>(\d+)<\/(?:gpxtpx:)?hr>/);
@@ -279,10 +297,19 @@ function parseGpx(xml: string): Track {
 function parseTcx(xml: string): Track {
   const points: TrackPoint[] = [];
   const sport = xml.match(/<Activity[^>]*Sport="([^"]+)"/i)?.[1] ?? 'unknown';
-  const re = /<Trackpoint>([\s\S]*?)<\/Trackpoint>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) {
-    const body = m[1] ?? '';
+  // Samme lineære scanning som GPX: en åben <Trackpoint> uden lukketag betyder
+  // at resten af filen er trunkeret, ikke at der skal skannes videre.
+  const openTag = '<Trackpoint>';
+  const closeTag = '</Trackpoint>';
+  let pos = 0;
+  while (true) {
+    const open = xml.indexOf(openTag, pos);
+    if (open < 0) break;
+    const bodyStart = open + openTag.length;
+    const close = xml.indexOf(closeTag, bodyStart);
+    if (close < 0) break;
+    const body = xml.slice(bodyStart, close);
+    pos = close + closeTag.length;
     const time = body.match(/<Time>([^<]+)<\/Time>/);
     const t = time?.[1] ? new Date(time[1]) : null;
     if (!t || Number.isNaN(t.getTime())) continue;
