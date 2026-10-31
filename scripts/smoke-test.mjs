@@ -14,6 +14,7 @@ import { parseCsv } from '../src/csv.ts';
 import { utf8Bytes } from './bytes.mjs';
 import { renderMarkdown, fmtDelta, fmtDuration, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
+import { resolveTargets } from '../src/install.ts';
 import { cleanPath, discoverSources } from '../src/interactive.ts';
 import { collectActivityFiles, isActivityFile, rowFromTrack } from '../src/loose.ts';
 import {
@@ -3955,6 +3956,29 @@ try {
 
   // Punkt 3: installationen må ikke bygge relative mål af en tom HOME,
   // og containment-tjekket skal bruge path.relative, ikke streng-prefix.
+  // En spawn-check viser barnets stderr når den fejler, så en degradering
+  // til null eller status 1 kan forklares i stedet for bare at stå som "fik".
+  function spawnCheck(label, run, actual, predicate) {
+    const ok = predicate(actual);
+    if (ok) {
+      console.log(`ok    ${label}`);
+      return;
+    }
+    failures++;
+    console.log(`FAIL  ${label} — fik: ${JSON.stringify(actual)}; status: ${JSON.stringify(run.status)}; stderr: ${JSON.stringify(run.stderr ?? '')}`);
+  }
+  const parseSpawnJson = (run) => {
+    try {
+      return JSON.parse(run.stdout);
+    } catch {
+      return null;
+    }
+  };
+  const parsedTargetDirs = (targets) => (Array.isArray(targets) ? targets.map((t) => t.dir) : null);
+  const tailParts = (d) => d.split(/[\\/]/).filter(Boolean).slice(-3).join('/');
+  const isSixTargets = (v) => Array.isArray(v) && v.length === 6;
+  const isSixRootTargets = (v) =>
+    isSixTargets(v) && v.every((d) => isAbsolute(d)) && v.some((d) => tailParts(d) === '.hermes/skills/strava-digest');
   const resolveScript = join(tmp, 'resolve-targets.mjs');
   const insideScript = join(tmp, 'path-inside.mjs');
   writeFileSync(resolveScript, `import { resolveTargets } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'src', 'install.ts')).href)};\nconsole.log(JSON.stringify(resolveTargets()));\n`);
@@ -3962,29 +3986,39 @@ try {
   const normalHome = join(tmp, 'normal-home');
   mkdirSync(normalHome, { recursive: true });
   const normalTargets = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: normalHome, USERPROFILE: normalHome } });
-  let parsedTargets = null;
-  try { parsedTargets = JSON.parse(normalTargets.stdout); } catch {}
-  check('install: resolveTargets virker med normal HOME', normalTargets.status, (v) => v === 0);
-  check('install: alle mål er absolutte og under hjemmemappen', Array.isArray(parsedTargets) ? parsedTargets.map((t) => t.dir) : null, (v) => Array.isArray(v) && v.length === 6 && v.every((d) => isAbsolute(d) && d.startsWith(normalHome + sep)));
+  const parsedTargets = parseSpawnJson(normalTargets);
+  spawnCheck('install: resolveTargets virker med normal HOME', normalTargets, normalTargets.status, (v) => v === 0);
+  spawnCheck('install: alle mål er absolutte og under hjemmemappen', normalTargets, parsedTargetDirs(parsedTargets), (v) => isSixTargets(v) && v.every((d) => isAbsolute(d) && d.startsWith(normalHome + sep)));
 
   // HOME=/ er roden, ikke en relativ sti: legitime mål må ikke afvises.
-  const rootHomeTargets = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: '/', USERPROFILE: '/' } });
-  let parsedRootTargets = null;
-  try { parsedRootTargets = JSON.parse(rootHomeTargets.stdout); } catch {}
-  const tailParts = (d) => d.split(/[\\/]/).filter(Boolean).slice(-3).join('/');
-  check('install: HOME=/ accepteres', rootHomeTargets.status, (v) => v === 0);
-  check('install: HOME=/ giver seks mål under roden', Array.isArray(parsedRootTargets) ? parsedRootTargets.map((t) => t.dir) : null, (v) => Array.isArray(v) && v.length === 6 && v.every((d) => isAbsolute(d)) && v.some((d) => tailParts(d) === '.hermes/skills/strava-digest'));
+  // Kaldet er direkte, så assertionen virker på alle platforme.
+  let directRootDirs = null;
+  try {
+    directRootDirs = resolveTargets('/').map((t) => t.dir);
+  } catch {}
+  check('install: HOME=/ accepteres', directRootDirs, isSixTargets);
+  check('install: HOME=/ giver seks mål under roden', directRootDirs, isSixRootTargets);
+
+  // Miljøvariabel-varianten bevares kun hvor homedir() kan udtrykke den:
+  // på Windows laver libuv et eksistens-tjek, og "/" er ikke en mappe der.
+  if (process.platform !== 'win32') {
+    const rootHomeTargets = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: '/', USERPROFILE: '/' } });
+    const parsedRootTargets = parseSpawnJson(rootHomeTargets);
+    spawnCheck('install: barn med HOME=/ accepteres', rootHomeTargets, parsedRootTargets, isSixTargets);
+    spawnCheck('install: barn med HOME=/ giver seks mål under roden', rootHomeTargets, parsedTargetDirs(parsedRootTargets), isSixRootTargets);
+  } else {
+    console.log('skip: HOME=/ som miljøvariabel kan ikke udtrykkes på Windows (libuvs eksistens-tjek)');
+  }
 
   const insideRun = spawnSync(process.execPath, [insideScript], { encoding: 'utf8' });
-  let insideResults = null;
-  try { insideResults = JSON.parse(insideRun.stdout); } catch {}
-  check('install: isPathInside skelner inde fra ude', insideResults, (v) => Array.isArray(v) && v[0] === true && v[1] === true && v[2] === false && v[3] === false && v[4] === false);
+  const insideResults = parseSpawnJson(insideRun);
+  spawnCheck('install: isPathInside skelner inde fra ude', insideRun, insideResults, (v) => Array.isArray(v) && v[0] === true && v[1] === true && v[2] === false && v[3] === false && v[4] === false);
 
   if (process.platform !== 'win32') {
     const linkHome = join(tmp, 'link-home');
     symlinkSync(normalHome, linkHome);
     const linkedHomeTargets = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: linkHome, USERPROFILE: linkHome } });
-    check('install: hjemmemappe som symlink accepteres', linkedHomeTargets.status, (v) => v === 0);
+    spawnCheck('install: hjemmemappe som symlink accepteres', linkedHomeTargets, linkedHomeTargets.status, (v) => v === 0);
   } else {
     console.log('skip: symlink-test kører ikke på Windows');
   }
@@ -3992,12 +4026,12 @@ try {
   const emptyHomeCwd = join(tmp, 'empty-home-cwd');
   mkdirSync(join(emptyHomeCwd, '.hermes', 'skills'), { recursive: true });
   const emptyHomeRun = spawnSync(process.execPath, [cliPath, '--install-skill'], { encoding: 'utf8', cwd: emptyHomeCwd, env: { ...process.env, HOME: '', USERPROFILE: '' } });
-  check('install: tom HOME fejler', emptyHomeRun.status, (v) => v !== 0);
+  spawnCheck('install: tom HOME fejler', emptyHomeRun, emptyHomeRun.status, (v) => v !== 0);
   check('install: tom HOME giver klar besked på stderr', emptyHomeRun.stderr, (v) => v.includes('home directory') && v.includes('absolute'));
   check('install: tom HOME skriver ingen fil', existsSync(join(emptyHomeCwd, '.hermes', 'skills', 'strava-digest', 'SKILL.md')), (v) => v === false);
 
   const relativeHomeRun = spawnSync(process.execPath, [resolveScript], { encoding: 'utf8', env: { ...process.env, HOME: 'relative/home', USERPROFILE: 'relative/home' } });
-  check('install: relativ HOME fejler', relativeHomeRun.status, (v) => v !== 0);
+  spawnCheck('install: relativ HOME fejler', relativeHomeRun, relativeHomeRun.status, (v) => v !== 0);
   check('install: relativ HOME giver klar besked på stderr', relativeHomeRun.stderr, (v) => v.includes('home directory') && v.includes('absolute'));
 
   // Punkt 4: fmtDelta skal runde totalen, ikke minutter og sekunder hver for sig.
