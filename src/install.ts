@@ -31,11 +31,26 @@ export function isPathInside(root: string, target: string): boolean {
 }
 
 /**
+ * Læs hjemmemappen uden at lade en kastende homedir() slippe ud.
+ *
+ * På Windows kaster libuv, når USERPROFILE ikke peger på en eksisterende
+ * mappe. Uden denne fælde ville brugeren se libuvs fejl i stedet for vores
+ * egen besked, og en tom eller ugyldig hjemmemappe ville aldrig nå guarden.
+ */
+function safeHomedir(): string {
+  try {
+    return homedir();
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Byg de absolutte målmapper ud fra hjemmemappen. En tom eller relativ
  * homedir() må ikke blive til relative mål, for så skriver installationen
  * i forhold til cwd — og det er ikke brugerens hjemmemappe.
  */
-export function resolveTargets(home: string = homedir()): { name: string; dir: string }[] {
+export function resolveTargets(home: string = safeHomedir()): { name: string; dir: string }[] {
   if (!isAbsolute(home)) {
     throw new Error(
       `cannot install the skill: the home directory is ${home ? `"${home}"` : 'empty'}, but it must be an absolute path`,
