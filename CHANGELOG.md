@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] — 2026-10-31
+
+### Fixed
+
+- On Windows, `os.homedir()` throws when the home directory does not exist,
+  so `--install-skill` could show libuv's `uv_os_homedir returned ENOENT`
+  instead of the tool's own message that the home directory must be an
+  absolute path. The guard now catches that case and reports it directly
+  (#47).
+
 ## [1.0.5] — 2026-10-31
 
 ### Changed
