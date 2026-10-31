@@ -16,6 +16,8 @@ export interface ExportSource {
   size(path: string): Promise<number>;
   /** Notes about entries that were skipped while opening the source. */
   warnings(): string[];
+  /** True when an activities.csv entry was skipped because it is not a safe relative path. */
+  hasSkippedActivitiesCsv(): boolean;
   close(): Promise<void>;
 }
 
@@ -56,17 +58,22 @@ function openZip(path: string): Promise<ExportSource> {
         if (err || !zf) return reject(err ?? new Error(`could not open ${path}`));
         const entries = new Map<string, yauzl.Entry>();
         let skipped = 0;
+        let skippedActivitiesCsv = false;
 
         zf.on('error', reject);
         zf.on('entry', (entry: yauzl.Entry) => {
           const name = decodeEntryName(entry);
-          if (!isSafeRelativePath(name)) skipped++;
-          else if (!name.endsWith('/')) entries.set(name, entry);
+          if (!isSafeRelativePath(name)) {
+            skipped++;
+            if (!name.endsWith('/') && name.toLowerCase().endsWith('activities.csv')) {
+              skippedActivitiesCsv = true;
+            }
+          } else if (!name.endsWith('/')) entries.set(name, entry);
           zf.readEntry();
         });
         zf.on('end', () =>
           resolve({
-            label: `${path} (zip, ${entries.size} files)`,
+            label: `${path} (zip, ${entries.size} ${entries.size === 1 ? 'file' : 'files'})`,
             list: () => [...entries.keys()],
             read: (name) => readZipEntry(zf, entries, name),
             size: async (name) => {
@@ -75,6 +82,7 @@ function openZip(path: string): Promise<ExportSource> {
               return entry.uncompressedSize;
             },
             warnings: () => skippedEntryWarnings(skipped),
+            hasSkippedActivitiesCsv: () => skippedActivitiesCsv,
             close: async () => zf.close(),
           }),
         );
@@ -191,11 +199,12 @@ async function openDir(path: string): Promise<ExportSource> {
   }
   await walk(path);
   return {
-    label: `${path} (folder, ${files.length} files)`,
+    label: `${path} (folder, ${files.length} ${files.length === 1 ? 'file' : 'files'})`,
     list: () => [...files],
     read: (name) => readFileLimited(join(path, name), name),
     size: async (name) => (await stat(join(path, name))).size,
     warnings: () => [],
+    hasSkippedActivitiesCsv: () => false,
     close: async () => {},
   };
 }
