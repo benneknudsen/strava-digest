@@ -3387,6 +3387,91 @@ try {
   const dataOnlyXml = `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>DataOnly</name><type>running</type><trkseg><trkpt data-lat="99" data-lon="99"><ele>20</ele><time>2026-10-11T07:00:00Z</time></trkpt></trkseg></trk></gpx>\n`;
   check('GPX: kun data-lat/data-lon giver ingen punkter', safeTrack('DataOnly.gpx', Buffer.from(dataOnlyXml))?.points.length ?? null, (v) => v === 0);
 
+  // issue #40: en trunkeret fil må ikke få den lazy regex til at skanne resten
+  // af filen fra hver åben tag. 40.000 åbne <trkpt> tog sekunder på O(n²);
+  // lineær scanning giver 0 punkter med det samme. Tidsgrænsen er løs nok
+  // til CI og umulig at overholde for den gamle kode.
+  const truncatedGpxPoint = (i) =>
+    `<trkpt lat="55.${String(i).padStart(5, '0')}" lon="12.${String(i).padStart(5, '0')}"><ele>20</ele><time>2026-10-11T07:00:00Z</time>`;
+  const truncatedGpx = `<?xml version="1.0"?>\n<gpx version="1.1"><trk><type>running</type><trkseg>\n${Array.from({ length: 40000 }, (_, i) => truncatedGpxPoint(i)).join('\n')}\n</trkseg></trk></gpx>\n`;
+  const gpxStart = Date.now();
+  const truncatedGpxTrack = (() => {
+    try {
+      return parseActivityBuffer('Truncated.gpx', Buffer.from(truncatedGpx));
+    } catch (err) {
+      return { error: String(err) };
+    }
+  })();
+  const gpxElapsed = Date.now() - gpxStart;
+  check('GPX: trunkeret fil giver 0 punkter uden crash', {
+    points: truncatedGpxTrack.points?.length ?? null,
+    error: truncatedGpxTrack.error ?? null,
+    fast: gpxElapsed < 1500,
+  }, (v) => v.points === 0 && v.error === null && v.fast);
+
+  const truncatedTcxPoint = (i) =>
+    `<Trackpoint><Time>2026-10-11T07:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z</Time><Position><LatitudeDegrees>55.${String(i).padStart(5, '0')}</LatitudeDegrees><LongitudeDegrees>12.${String(i).padStart(5, '0')}</LongitudeDegrees></Position><DistanceMeters>${i * 2.5}</DistanceMeters>`;
+  const truncatedTcx = `<?xml version="1.0"?>\n<TrainingCenterDatabase><Activities><Activity Sport="Running"><Lap><Track>\n${Array.from({ length: 40000 }, (_, i) => truncatedTcxPoint(i)).join('\n')}\n</Track></Lap></Activity></Activities></TrainingCenterDatabase>\n`;
+  const tcxStart = Date.now();
+  const truncatedTcxTrack = (() => {
+    try {
+      return parseActivityBuffer('Truncated.tcx', Buffer.from(truncatedTcx));
+    } catch (err) {
+      return { error: String(err) };
+    }
+  })();
+  const tcxElapsed = Date.now() - tcxStart;
+  check('TCX: trunkeret fil giver 0 punkter uden crash', {
+    points: truncatedTcxTrack.points?.length ?? null,
+    error: truncatedTcxTrack.error ?? null,
+    fast: tcxElapsed < 2000,
+  }, (v) => v.points === 0 && v.error === null && v.fast);
+
+  // Regression for issue #40: den lineære scanning skal give præcis samme
+  // punkter og felter som den gamle regex på velformet input, inklusive
+  // attributgrænsen fra #21 og spring-over-reglerne.
+  const fieldsGpxXml = `<?xml version="1.0"?>\n<gpx version="1.1"><trk><name>Fields</name><type>running</type><trkseg>` +
+    `<trkpt lat="56.1" lon="10.1"><ele>31.5</ele><time>2026-10-11T07:00:00Z</time><gpxtpx:hr>150</gpxtpx:hr><gpxtpx:cad>84</gpxtpx:cad></trkpt>` +
+    `<trkpt lat="56.2" lon="10.2"><ele>32.5</ele><time>2026-10-11T07:00:10Z</time><hr>151</hr><cad>85</cad></trkpt>` +
+    `<trkpt data-lat="99" lat="56.3" data-lon="99" lon="10.3"><ele>33.5</ele><time>2026-10-11T07:00:20Z</time></trkpt>` +
+    `<trkpt lat="56.4" lon="10.4"><ele>34.5</ele></trkpt>` +
+    `<trkpt lon="10.5"><ele>35.5</ele><time>2026-10-11T07:00:40Z</time></trkpt>` +
+    `</trkseg></trk></gpx>\n`;
+  const fieldsGpx = parseActivityBuffer('Fields.gpx', Buffer.from(fieldsGpxXml));
+  check('GPX: velformet fil giver samme punkter og felter', fieldsGpx.points.map((p) => ({
+    t: p.t.toISOString(),
+    lat: p.lat ?? null,
+    lon: p.lon ?? null,
+    altM: p.altM ?? null,
+    hr: p.hr ?? null,
+    cad: p.cad ?? null,
+  })), (v) => JSON.stringify(v) === JSON.stringify([
+    { t: '2026-10-11T07:00:00.000Z', lat: 56.1, lon: 10.1, altM: 31.5, hr: 150, cad: 84 },
+    { t: '2026-10-11T07:00:10.000Z', lat: 56.2, lon: 10.2, altM: 32.5, hr: 151, cad: 85 },
+    { t: '2026-10-11T07:00:20.000Z', lat: 56.3, lon: 10.3, altM: 33.5, hr: null, cad: null },
+  ]) && fieldsGpx.sport === 'running' && fieldsGpx.source === 'gpx' && fieldsGpx.distanceDerived === true);
+
+  const fieldsTcxXml = `<?xml version="1.0"?>\n<TrainingCenterDatabase><Activities><Activity Sport="Biking"><Lap><Track>` +
+    `<Trackpoint><Time>2026-10-11T07:00:00Z</Time><Position><LatitudeDegrees>56.1</LatitudeDegrees><LongitudeDegrees>10.1</LongitudeDegrees></Position><DistanceMeters>0.0</DistanceMeters><HeartRateBpm><Value>140</Value></HeartRateBpm><Cadence>80</Cadence></Trackpoint>` +
+    `<Trackpoint><Time>2026-10-11T07:00:10Z</Time><Position><LatitudeDegrees>56.2</LatitudeDegrees><LongitudeDegrees>10.2</LongitudeDegrees></Position><DistanceMeters>42.5</DistanceMeters><HeartRateBpm><Value>141</Value></HeartRateBpm></Trackpoint>` +
+    `<Trackpoint><Time>2026-10-11T07:00:20Z</Time><Position><LatitudeDegrees>56.3</LatitudeDegrees><LongitudeDegrees>10.3</LongitudeDegrees></Position><DistanceMeters>85.0</DistanceMeters></Trackpoint>` +
+    `<Trackpoint><Time>not-a-date</Time><Position><LatitudeDegrees>56.4</LatitudeDegrees><LongitudeDegrees>10.4</LongitudeDegrees></Position><DistanceMeters>130.0</DistanceMeters></Trackpoint>` +
+    `</Track></Lap></Activity></Activities></TrainingCenterDatabase>\n`;
+  const fieldsTcx = parseActivityBuffer('Fields.tcx', Buffer.from(fieldsTcxXml));
+  check('TCX: velformet fil giver samme punkter og felter', fieldsTcx.points.map((p) => ({
+    t: p.t.toISOString(),
+    lat: p.lat ?? null,
+    lon: p.lon ?? null,
+    altM: p.altM ?? null,
+    hr: p.hr ?? null,
+    cad: p.cad ?? null,
+    distM: p.distM ?? null,
+  })), (v) => JSON.stringify(v) === JSON.stringify([
+    { t: '2026-10-11T07:00:00.000Z', lat: 56.1, lon: 10.1, altM: null, hr: 140, cad: 80, distM: 0 },
+    { t: '2026-10-11T07:00:10.000Z', lat: 56.2, lon: 10.2, altM: null, hr: 141, cad: null, distM: 42.5 },
+    { t: '2026-10-11T07:00:20.000Z', lat: 56.3, lon: 10.3, altM: null, hr: null, cad: null, distM: 85 },
+  ]) && fieldsTcx.sport === 'Biking' && fieldsTcx.source === 'tcx' && fieldsTcx.distanceDerived === false);
+
   // The limit and the parser must answer "is this an activity file?" the same
   // way. Only the last suffix decides, so a mid-name `.fit` is not an activity
   // file and falls through to the other-files rule.
