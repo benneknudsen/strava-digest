@@ -103,12 +103,6 @@ export interface ActivityStats {
   skippedNoDate: number;
   /** Of `skippedNoDate`, rows that also had no file name. */
   skippedNoDateNoFilename: number;
-  /**
-   * Highest max heart rate among the rows dropped for a missing or unparsable
-   * date. They are not in the digest, but their Max HR is still a real
-   * observation from the export, so the observed max can include it.
-   */
-  maxHrOfSkipped: number | null;
   /** true when the distance unit came from the column scale after a unit column was unusable */
   distanceUnitAssumed: boolean;
 }
@@ -137,7 +131,6 @@ export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActiviti
     rowsInExport: table.rows.length,
     skippedNoDate: 0,
     skippedNoDateNoFilename: 0,
-    maxHrOfSkipped: null,
     distanceUnitAssumed: units.assumed,
   };
   for (const row of table.rows) {
@@ -147,9 +140,6 @@ export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActiviti
     if (!date) {
       stats.skippedNoDate += 1;
       if (!filename) stats.skippedNoDateNoFilename += 1;
-      if (maxHr != null && maxHr > 0) {
-        stats.maxHrOfSkipped = Math.max(stats.maxHrOfSkipped ?? 0, maxHr);
-      }
       continue;
     }
     const type = raw(row, map, 'type');

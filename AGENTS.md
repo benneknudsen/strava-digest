@@ -31,11 +31,13 @@ means.
 - **Never hand the raw data to the model.** The digest is the whole point.
 - **Never invent numbers.** A missing field shows as `-`.
 - **Max heart rate comes from the user.** Strava's export has no zone
-  configuration. Without `--max-hr` the tool falls back to the highest heart
-  rate in the export and labels it `source=export-observation`; that is a
-  guess, usually a single spike, so it is often higher than a real max and
-  makes training look easier than it is. Run with `--max-hr <value>` once the
-  user has given one, and never present the fallback as the user's max.
+  configuration. Without `--max-hr` the tool falls back to the p95 of the
+  `Max Heart Rate` values from the two years before the newest activity and
+  labels it `source=export-p95`; fewer than 21 values means the highest
+  measured value in the window instead, labelled `source=export-max`, and the
+  note states the count. That is still a guess, not a tested max. Run with
+  `--max-hr <value>` once the user has given one, and never present the
+  fallback as the user's max.
 - **`context.md` belongs to the user.** It is embedded in the digest and is
   gitignored, because the content is personal. Do not write to it.
 - **`media/` is not data.** It is the images and videos from the activities,

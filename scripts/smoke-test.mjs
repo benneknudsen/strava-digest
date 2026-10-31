@@ -184,8 +184,11 @@ try {
   check('flag vinder over FIT-zoner', resolveZoneConfig(200, { maxHr: 190 }), (v) => v?.source === 'flag' && v?.maxHr === 200);
   // Den observerede max-puls er et gæt, så den må aldrig slå urets egne
   // zoner — men den er bedre end ingen zoner overhovedet.
-  check('observeret max bruges når intet andet findes', resolveZoneConfig(null, undefined, 199), (v) =>
-    v?.source === 'export-observation' && v?.maxHr === 199,
+  check('observeret p95 bruges når intet andet findes', resolveZoneConfig(null, undefined, 199), (v) =>
+    v?.source === 'export-p95' && v?.maxHr === 199,
+  );
+  check('højeste målte værdi får sin egen kilde', resolveZoneConfig(null, undefined, 199, 'export-max'), (v) =>
+    v?.source === 'export-max' && v?.maxHr === 199,
   );
   check('observeret max taber mod urets zoner', resolveZoneConfig(null, { maxHr: 190 }, 199), (v) =>
     v?.source === 'fit' && v?.maxHr === 190,
@@ -559,14 +562,15 @@ try {
   check('CLI-agent viser zonefordeling', /z=\d/.test(cliZones), (v) => v === true);
   check('CLI-agent markerer zonekilden', cliZones, (v) => /^max_hr=240 source=flag$/m.test(v));
 
-  // Uden --max-hr bruger værktøjet den højeste puls i eksporten som
-  // zone-grundlag. Før stod headeren "max_hr=199 source=export-observation"
-  // mens turene havde z=- og load=-, altså en header der løj. Nu skal de
-  // to være enige.
+  // Uden --max-hr bruger værktøjet p95 af de observerede max-puls-værdier
+  // inden for to år som zone-grundlag, når der er mindst 21. Fixturen har
+  // fire datede aktiviteter (145, 150, 174, 181), altså for få — grundlaget
+  // er derfor den højeste målte værdi, 181, med sin egen kilde.
   const cliNoHr = runCli([tmp], { encoding: 'utf8' });
   const noHrHeader = cliNoHr.match(/^max_hr=(\d+) source=([\w-]+)$/m);
   check('uden --max-hr er der en max-puls i headeren', noHrHeader?.[1], (v) => v !== undefined);
-  check('uden --max-hr er kilden export-observation', noHrHeader?.[2], (v) => v === 'export-observation');
+  check('uden --max-hr er kilden export-max under tærsklen', noHrHeader?.[2], (v) => v === 'export-max');
+  check('uden --max-hr er den højeste målte værdi 181', noHrHeader?.[1], (v) => v === '181');
   check('uden --max-hr har turene stadig zoner', cliNoHr, (v) =>
     /^d=.*\sz=[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+/m.test(v),
   );
@@ -575,11 +579,12 @@ try {
   check('CLI uden --last: ingen talt/vist-note', cliNoHr, (v) => !v.includes('shown (--last)'));
 
   // Agenten laeser SCHEMA og SIGNALS og fortolker derfra. Hvis de ikke
-  // siger, at "max" kan vaere det observerede gaet, vaesker agenten
-  // zonerne som om de la paa brugerens rigtige max-puls. Det er præcis
+  // siger, at "max" kan vaere et observeret grundlag, vaesker agenten
+  // zonerne som om de laa paa brugerens rigtige max-puls. Det er præcis
   // den fejltolkning, der gør træningen se lettere ud end den er.
-  check('SIGNALS forklarer at max kan vaere et gaet', cliNoHr, (v) =>
-    v.includes('export-observation') && v.includes('not the user') && v.includes('spike'),
+  check('SIGNALS forklarer begge observerede grundlag', cliNoHr, (v) =>
+    v.includes('export-p95') && v.includes('export-max') && v.includes('not the user') &&
+    v.includes('95th percentile') && v.includes('fewer than 21'),
   );
 
   /* ---- regression (issue #14): rækker uden filnavn eller dato ---- */
@@ -853,8 +858,26 @@ try {
     !v.includes('n="Older no file"'),
   );
 
-  // Krav 2: den observerede max-puls er den højeste i hele eksporten. Rækker
-  // uden fil tæller med, og det gør undaterede rækker også.
+  // Krav 2: zone-grundlaget er p95 af de observerede max-puls-værdier
+  // inden for to år fra den nyeste aktivitet. Et spike må ikke flytte det.
+  const basisRows = [];
+  basisRows.push('1,"Oct 12, 2026, 6:32:10 AM",Spike,Løb,1800,1800,5.0,220,150,');
+  for (let i = 0; i < 20; i++) {
+    basisRows.push(`${i + 2},"Oct 12, 2026, 6:32:10 AM",Basis ${i},Løb,1800,1800,5.0,180,150,`);
+  }
+  basisRows.push('22,"Oct 12, 2023, 6:32:10 AM",Old spike,Løb,1800,1800,5.0,250,150,');
+  const p95Dir = writeExport('maxhr-p95', basisRows);
+  const p95Agent = runCli([p95Dir], { encoding: 'utf8' });
+  check('max HR: at 21 values one spike has zero weight in the p95 basis', p95Agent, (v) =>
+    /^max_hr=180 source=export-p95$/m.test(v),
+  );
+  check('max HR: p95 ignores values older than two years', p95Agent, (v) =>
+    /^max_hr=180 source=export-p95$/m.test(v) && !/^max_hr=250 /m.test(v),
+  );
+  check('max HR: the 21-value p95 note states the value, count and window start', p95Agent, (v) =>
+    /^- max_hr=180 is the 95th percentile of 21 Max Heart Rate values observed in the export since 2024-10-12 \(two years back from the newest activity\)/m.test(v),
+  );
+
   const maxHrDir = writeExport('maxhr', [
     '1,"Oct 12, 2026, 6:32:10 AM",No file,Løb,1800,1800,5.0,190,150,',
     '2,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,174,150,Good.gpx',
@@ -862,8 +885,98 @@ try {
   copyGoodGpx(maxHrDir);
 
   const maxHrAgent = runCli([maxHrDir], { encoding: 'utf8' });
-  check('max HR: observed max includes no-file rows', maxHrAgent, (v) =>
-    /^max_hr=190 source=export-observation$/m.test(v),
+  check('max HR: fewer than 21 values falls back to the highest measured value', maxHrAgent, (v) =>
+    /^max_hr=190 source=export-max$/m.test(v),
+  );
+  check('max HR: the fallback note says it rests on fewer than 21 values', maxHrAgent, (v) =>
+    /the highest of 2 Max Heart Rate values observed in the export since 2024-10-12 .*fewer than 21 values, so it is the highest measured value, not a p95/m.test(v),
+  );
+  const maxHrMd = runCli([maxHrDir, '--format', 'md'], { encoding: 'utf8' });
+  check('max HR: Markdown shows the fallback note', maxHrMd, (v) =>
+    /^- max_hr=190 is the highest of 2 Max Heart Rate values .*fewer than 21 values, so it is the highest measured value, not a p95/m.test(v),
+  );
+  check('max HR: Markdown zone line names the highest measured value, not a p95', maxHrMd, (v) =>
+    /the highest measured value in the export, not --max-hr/.test(v) &&
+    !/observed p95 in the export/.test(v),
+  );
+  const maxHrJson = JSON.parse(runCli([maxHrDir, '--json'], { encoding: 'utf8' }));
+  check('max HR: JSON source distinguishes export-max', maxHrJson.maxHrSource, (v) => v === 'export-max');
+  check('max HR: JSON notes state the highest measured value and the count', maxHrJson.notes, (v) =>
+    v.some((note) => /the highest of 2 Max Heart Rate values .*fewer than 21 values/.test(note)),
+  );
+
+  const fiveMaxHrDir = writeExport('maxhr-five', [
+    '1,"Oct 12, 2026, 6:32:10 AM",A,Løb,1800,1800,5.0,190,150,',
+    '2,"Oct 11, 2026, 6:32:10 AM",B,Løb,1800,1800,5.0,174,150,',
+    '3,"Oct 10, 2026, 6:32:10 AM",C,Løb,1800,1800,5.0,180,150,',
+    '4,"Oct 9, 2026, 6:32:10 AM",D,Løb,1800,1800,5.0,181,150,',
+    '5,"Oct 8, 2026, 6:32:10 AM",E,Løb,1800,1800,5.0,182,150,',
+  ]);
+  const fiveMaxHrAgent = runCli([fiveMaxHrDir], { encoding: 'utf8' });
+  check('max HR: five values stay under the threshold', fiveMaxHrAgent, (v) =>
+    /^max_hr=190 source=export-max$/m.test(v),
+  );
+
+  const threeMaxHrDir = writeExport('maxhr-three', [
+    '1,"Oct 12, 2026, 6:32:10 AM",A,Løb,1800,1800,5.0,180,150,',
+    '2,"Oct 11, 2026, 6:32:10 AM",B,Løb,1800,1800,5.0,181,150,',
+    '3,"Oct 10, 2026, 6:32:10 AM",C,Løb,1800,1800,5.0,220,150,',
+  ]);
+  const threeMaxHrAgent = runCli([threeMaxHrDir], { encoding: 'utf8' });
+  check('max HR: a spike at three values cannot become a p95', threeMaxHrAgent, (v) =>
+    /^max_hr=220 source=export-max$/m.test(v) && !/^max_hr=216 /m.test(v),
+  );
+  check('max HR: the three-value note names the highest measured value', threeMaxHrAgent, (v) =>
+    /the highest of 3 Max Heart Rate values .*fewer than 21 values, so it is the highest measured value, not a p95/m.test(v),
+  );
+
+  const twentyMaxHrDir = writeExport('maxhr-twenty', [
+    '1,"Oct 12, 2026, 6:32:10 AM",Spike,Løb,1800,1800,5.0,220,150,Good.gpx',
+    '2,"Oct 11, 2026, 6:32:10 AM",Basis 0,Løb,1800,1800,5.0,180,150,',
+    '3,"Oct 10, 2026, 6:32:10 AM",Basis 1,Løb,1800,1800,5.0,180,150,',
+    '4,"Oct 9, 2026, 6:32:10 AM",Basis 2,Løb,1800,1800,5.0,180,150,',
+    '5,"Oct 8, 2026, 6:32:10 AM",Basis 3,Løb,1800,1800,5.0,180,150,',
+    '6,"Oct 7, 2026, 6:32:10 AM",Basis 4,Løb,1800,1800,5.0,180,150,',
+    '7,"Oct 6, 2026, 6:32:10 AM",Basis 5,Løb,1800,1800,5.0,180,150,',
+    '8,"Oct 5, 2026, 6:32:10 AM",Basis 6,Løb,1800,1800,5.0,180,150,',
+    '9,"Oct 4, 2026, 6:32:10 AM",Basis 7,Løb,1800,1800,5.0,180,150,',
+    '10,"Oct 3, 2026, 6:32:10 AM",Basis 8,Løb,1800,1800,5.0,180,150,',
+    '11,"Oct 2, 2026, 6:32:10 AM",Basis 9,Løb,1800,1800,5.0,180,150,',
+    '12,"Oct 1, 2026, 6:32:10 AM",Basis 10,Løb,1800,1800,5.0,180,150,',
+    '13,"Sep 30, 2026, 6:32:10 AM",Basis 11,Løb,1800,1800,5.0,180,150,',
+    '14,"Sep 29, 2026, 6:32:10 AM",Basis 12,Løb,1800,1800,5.0,180,150,',
+    '15,"Sep 28, 2026, 6:32:10 AM",Basis 13,Løb,1800,1800,5.0,180,150,',
+    '16,"Sep 27, 2026, 6:32:10 AM",Basis 14,Løb,1800,1800,5.0,180,150,',
+    '17,"Sep 26, 2026, 6:32:10 AM",Basis 15,Løb,1800,1800,5.0,180,150,',
+    '18,"Sep 25, 2026, 6:32:10 AM",Basis 16,Løb,1800,1800,5.0,180,150,',
+    '19,"Sep 24, 2026, 6:32:10 AM",Basis 17,Løb,1800,1800,5.0,180,150,',
+    '20,"Sep 23, 2026, 6:32:10 AM",Basis 18,Løb,1800,1800,5.0,180,150,',
+  ]);
+  copyGoodGpx(twentyMaxHrDir);
+  const twentyMaxHrAgent = runCli([twentyMaxHrDir], { encoding: 'utf8' });
+  check('max HR: 20 values fall back to the highest measured value, not a p95', twentyMaxHrAgent, (v) =>
+    /^max_hr=220 source=export-max$/m.test(v) && !/^max_hr=182 /m.test(v),
+  );
+  check('max HR: the 20-value fallback note names the threshold', twentyMaxHrAgent, (v) =>
+    /the highest of 20 Max Heart Rate values observed in the export since 2024-10-12 .*fewer than 21 values, so it is the highest measured value, not a p95/m.test(v),
+  );
+  const twentyMaxHrMd = runCli([twentyMaxHrDir, '--format', 'md'], { encoding: 'utf8' });
+  check('max HR: 20-value Markdown zone line names the highest measured value', twentyMaxHrMd, (v) =>
+    /the highest measured value in the export, not --max-hr/.test(v) &&
+    !/observed p95 in the export/.test(v),
+  );
+
+  // Vinduet skal regnes fra den nyeste aktivitet, ikke fra i dag. En gammel
+  // eksport må ikke miste hele sit grundlag, fordi den blev lavet for år siden.
+  const oldExportDir = writeExport('maxhr-old-export', [
+    '1,"Oct 12, 2020, 6:32:10 AM",A,Løb,1800,1800,5.0,184,150,',
+    '2,"Oct 11, 2020, 6:32:10 AM",B,Løb,1800,1800,5.0,182,150,',
+    '3,"Oct 10, 2020, 6:32:10 AM",C,Løb,1800,1800,5.0,180,150,',
+  ]);
+  const oldExportAgent = runCli([oldExportDir], { encoding: 'utf8' });
+  check('max HR: the window is anchored to the newest activity, not today', oldExportAgent, (v) =>
+    /^max_hr=184 source=export-max$/m.test(v) &&
+    /observed in the export since 2018-10-12 \(two years back from the newest activity\)/m.test(v),
   );
 
   const undatedMaxHrDir = writeExport('maxhr-undated', [
@@ -871,32 +984,26 @@ try {
     '2,not-a-date,Undated,Løb,1800,1800,5.0,200,150,Bad.gpx',
   ]);
   copyGoodGpx(undatedMaxHrDir);
-  const undatedMaxHrTable = parseCsv(readFileSync(join(undatedMaxHrDir, 'activities.csv'), 'utf8'));
-  const undatedMaxHrStats = parseActivities(undatedMaxHrTable, mapColumns(undatedMaxHrTable)).stats;
-  check('max HR: skipped rows expose their max HR', undatedMaxHrStats.maxHrOfSkipped, (v) => v === 200);
 
   const undatedMaxHrAgent = runCli([undatedMaxHrDir], { encoding: 'utf8' });
-  check('max HR: observed max includes undated rows', undatedMaxHrAgent, (v) =>
-    /^max_hr=200 source=export-observation$/m.test(v),
+  check('max HR: undated rows cannot enter the two-year window', undatedMaxHrAgent, (v) =>
+    /^max_hr=174 source=export-max$/m.test(v),
   );
 
   // Et rigtigt nul i Max Heart Rate er ikke en observation. Uden denne guard
-  // ville maxHrOfSkipped blive 0, og forskellen mellem "ingen puls" og "puls
-  // 0" ville forsvinde i statistikken.
+  // ville en række med puls 0 kunne blive grundlaget, og forskellen mellem
+  // "ingen puls" og "puls 0" ville forsvinde.
   const zeroMaxHrDir = writeExport('maxhr-zero', [
     '1,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,174,150,Good.gpx',
     '2,not-a-date,Zero HR,Løb,1800,1800,5.0,0,150,Bad.gpx',
   ]);
   copyGoodGpx(zeroMaxHrDir);
-  const zeroMaxHrTable = parseCsv(readFileSync(join(zeroMaxHrDir, 'activities.csv'), 'utf8'));
-  const zeroMaxHrStats = parseActivities(zeroMaxHrTable, mapColumns(zeroMaxHrTable)).stats;
-  check('max HR: undated row with maxHr 0 gives null, not 0', zeroMaxHrStats.maxHrOfSkipped, (v) => v === null);
   const zeroMaxHrAgent = runCli([zeroMaxHrDir], { encoding: 'utf8' });
-  check('max HR: a zero maxHr on a skipped row cannot become the observed max', zeroMaxHrAgent, (v) =>
-    /^max_hr=174 source=export-observation$/m.test(v),
+  check('max HR: a zero maxHr cannot become the observed basis', zeroMaxHrAgent, (v) =>
+    /^max_hr=174 source=export-max$/m.test(v),
   );
-  check('max HR: note says the highest Max Heart Rate value in the CSV', undatedMaxHrAgent, (v) =>
-    /^- max_hr=200 is the highest Max Heart Rate value in the activities CSV \(observed\), not your watch's own max HR; heart-rate samples in the track files are not scanned\. Strava's bulk export does not contain the watch's zone configuration, so the zone boundaries are a best guess\.$/m.test(v),
+  check('max HR: note names the fallback, the count and the source', undatedMaxHrAgent, (v) =>
+    /^- max_hr=174 is the highest of 1 Max Heart Rate value observed in the export since 2024-10-11 \(two years back from the newest activity\) — fewer than 21 values, so it is the highest measured value, not a p95, not your watch's own max HR; heart-rate samples in the track files are not scanned\. Strava's bulk export does not contain the watch's zone configuration, so the zone boundaries are a best guess\.$/m.test(v),
   );
 
   const gapsList = runCli([gapsDir, '--list'], { encoding: 'utf8' });

@@ -117,17 +117,19 @@ is what finds trends, so widen it once the first answer looks right.
 ## Max heart rate and zones
 
 Strava's bulk export does **not** contain the watch's own zone configuration.
-Without `--max-hr` the tool falls back to the highest heart rate it observed
-in the export and says so: the header reads `max_hr=199 source=export-observation`
-and the notes repeat that it is observed, not the watch's own max.
+Without `--max-hr` the tool falls back to the 95th percentile (p95) of the
+`Max Heart Rate` values from the two years before the newest activity and says
+so: the header reads `max_hr=186 source=export-p95`, and the notes state the
+value, how many observations it rests on, and the window start. With fewer
+than 21 values it uses the highest measured value in the window instead,
+and the note says so.
 
 Ask the user for their max HR and run with `--max-hr <value>` when zones
 matter. Never present a guess as fact — a wrong max HR mislabels every zone,
 and the agent then reasons confidently on something wrong.
 
-The observed fallback is usually a single spike, so it is often *higher* than
-a real max and makes the training look easier than it is. When the numbers
-matter, ask.
+The p95 is less sensitive to one spike than a raw maximum, but it is still an
+observation, not the user's tested max. When the numbers matter, ask.
 
 ## Errors worth knowing
 
@@ -140,11 +142,13 @@ matter, ask.
 - A run line containing `err=` means that file could not be read. The rest of
   the digest is still valid.
 - `z=-` means the run has no heart-rate data to zone. The zone boundaries
-  themselves are never missing: without `--max-hr` they come from the highest
-  heart rate in the export.
-- When the header says `source=export-observation`, the zone boundaries are a
-  guess — usually a single spike, often higher than a real max, so the
-  training looks easier than it is. Say so when you use the zone split.
+  themselves are never missing: without `--max-hr` they come from the p95 of
+  the observed `Max Heart Rate` values in the export (or the highest measured
+  value when there are fewer than 21).
+- When the header says `source=export-p95`, the zone boundaries rest on an
+  observation from the export, not the user's tested max. Read the note for the
+  value, the number of observations and the window start, and say so when you
+  use the zone split.
 
 ## What not to do
 
