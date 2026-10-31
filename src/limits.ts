@@ -54,6 +54,21 @@ export function formatMb(bytes: number): string {
 }
 
 /**
+ * Format an oversized byte count so it never reads as the limit itself.
+ * `formatMb` rounds to one decimal, so 100.04 MB becomes "100 MB" — the same
+ * text as a 100 MB limit, right next to "larger than". When that collision
+ * happens, round the measured size up at two decimals instead. Sizes that do
+ * not collide keep their normal one-decimal form.
+ */
+function formatMbAbove(bytes: number, limit: number): string {
+  const limitText = formatMb(limit);
+  const text = formatMb(bytes);
+  if (text !== limitText) return text;
+  const roundedUp = Math.ceil((bytes / MB) * 100) / 100;
+  return `${roundedUp.toFixed(2)} MB`;
+}
+
+/**
  * `bytes` is the size we know. Pass `null` when we stopped reading at the
  * limit and the real size is unknown: the message then says "more than the
  * limit" instead of presenting the bytes counted so far as the file size.
@@ -61,7 +76,7 @@ export function formatMb(bytes: number): string {
 export function tooLargeError(name: string, bytes: number | null): Error {
   const { limit, kind } = limitInfoForFileName(name);
   const shipKind = kind === 'other files' ? 'files' : kind;
-  const size = bytes == null ? `more than ${formatMb(limit)}` : formatMb(bytes);
+  const size = bytes == null ? `more than ${formatMb(limit)}` : formatMbAbove(bytes, limit);
   return new Error(
     `${name} is ${size}, which is larger than the ${formatMb(limit)} limit for ${kind} — a Strava export does not ship ${shipKind} that size.`,
   );
