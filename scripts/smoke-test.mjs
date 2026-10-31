@@ -782,6 +782,40 @@ try {
     /^- zones: .*\(from 1 of 2 runs\)$/m.test(v),
   );
 
+  // Regression (issue #43): Markdown-baselinen skal bruge samme puls-regel
+  // som run-linjerne — CSV'en vinder, filens puls er fallback. Uden dette
+  // blev gennemsnittet kun af de rækker, der havde CSV-puls.
+  const baselineHrDir = writeExport('baseline-hr', [
+    '1,"Oct 12, 2026, 6:32:10 AM",CSV HR,Løb,1800,1800,5.0,170,160,Good.gpx',
+    '2,"Oct 11, 2026, 6:32:10 AM",File HR,Løb,1800,1800,5.0,,,Good.gpx',
+  ]);
+  copyGoodGpx(baselineHrDir);
+  const baselineHrMd = runCli([baselineHrDir, '--format', 'md'], { encoding: 'utf8' });
+  check('windowStats: Markdown baseline uses the file HR when the CSV has none', baselineHrMd, (v) =>
+    /^- average: 6:00\/km · heart rate 157$/m.test(v),
+  );
+  check('windowStats: baseline HR matches the run-line HRs', baselineHrMd, (v) =>
+    v.includes('HR 160/170') && v.includes('HR 155/168'),
+  );
+
+  // Ingen puls nogen steder: baseline skal vise – og ikke kaste.
+  const baselineNoHrDir = writeExport('baseline-no-hr', [
+    '1,"Oct 12, 2026, 6:32:10 AM",No HR A,Løb,1800,1800,5.0,,,NoHr.gpx',
+    '2,"Oct 11, 2026, 6:32:10 AM",No HR B,Løb,1800,1800,5.0,,,NoHr.gpx',
+  ]);
+  writeFileSync(
+    join(baselineNoHrDir, 'NoHr.gpx'),
+    `<?xml version="1.0"?>\n<gpx version="1.1" creator="fixture"><trk><name>No HR</name><type>running</type><trkseg>` +
+      [0, 15, 30].map((m, i) =>
+        `<trkpt lat="55.676${i}" lon="12.5683"><ele>20</ele><time>2026-10-12T06:${String(m).padStart(2, '0')}:00Z</time></trkpt>`,
+      ).join('') +
+      `</trkseg></trk></gpx>\n`,
+  );
+  const baselineNoHrMd = runCli([baselineNoHrDir, '--format', 'md'], { encoding: 'utf8' });
+  check('windowStats: Markdown baseline shows – when no row has HR', baselineNoHrMd, (v) =>
+    /^- average: 6:00\/km · heart rate –$/m.test(v),
+  );
+
   // Noten om rækker uden filnavn beskriver rækkerne, ikke hvor i outputtet
   // de står. Derfor skal den være identisk i alle formater og sand under
   // --last, også når rækken ligger uden for de viste løb.

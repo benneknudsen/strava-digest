@@ -170,18 +170,31 @@ export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActiviti
   return { activities, stats };
 }
 
+/**
+ * En række plus analysen af dens fil, når filen kunne læses. Baseline skal
+ * kunne bruge filens puls, når CSV'en ikke har den.
+ */
+export interface WindowRun {
+  row: ActivityRow;
+  analysis?: { avgHr: number | null } | null;
+}
+
 /** Sum over a trailing window (used for the baseline block). */
-export function windowStats(runs: ActivityRow[], days: number, before: Date) {
+export function windowStats(runs: WindowRun[], days: number, before: Date) {
   const from = new Date(before.getTime() - days * 86_400_000);
-  const inWindow = runs.filter((r) => r.date > from && r.date <= before);
-  const distanceKm = inWindow.reduce((s, r) => s + (r.distanceM ?? 0) / 1000, 0);
+  const inWindow = runs.filter((r) => r.row.date > from && r.row.date <= before);
+  const distanceKm = inWindow.reduce((s, r) => s + (r.row.distanceM ?? 0) / 1000, 0);
   // Pace needs both distance and time, and uses the same filter as the agent format.
   const paceRows = inWindow.filter(
-    (r) => (r.distanceM ?? 0) > 0 && r.movingSec != null,
+    (r) => (r.row.distanceM ?? 0) > 0 && r.row.movingSec != null,
   );
-  const paceSec = paceRows.reduce((s, r) => s + r.movingSec!, 0);
-  const paceKm = paceRows.reduce((s, r) => s + r.distanceM! / 1000, 0);
-  const hrSamples = inWindow.map((r) => r.avgHr).filter((h): h is number => h != null);
+  const paceSec = paceRows.reduce((s, r) => s + r.row.movingSec!, 0);
+  const paceKm = paceRows.reduce((s, r) => s + r.row.distanceM! / 1000, 0);
+  // Samme puls-regel som run-linjerne: CSV'en vinder, filens værdi er
+  // fallback. Kun rækker med en kendt puls tæller i nævneren.
+  const hrSamples = inWindow
+    .map((r) => r.row.avgHr ?? r.analysis?.avgHr)
+    .filter((h): h is number => h != null);
   return {
     days,
     count: inWindow.length,
@@ -189,6 +202,6 @@ export function windowStats(runs: ActivityRow[], days: number, before: Date) {
     runsPerWeek: (inWindow.length / days) * 7,
     avgPaceSecPerKm: paceKm > 0 ? paceSec / paceKm : null,
     avgHr: hrSamples.length ? hrSamples.reduce((a, b) => a + b, 0) / hrSamples.length : null,
-    longestKm: inWindow.reduce((m, r) => Math.max(m, (r.distanceM ?? 0) / 1000), 0),
+    longestKm: inWindow.reduce((m, r) => Math.max(m, (r.row.distanceM ?? 0) / 1000), 0),
   };
 }

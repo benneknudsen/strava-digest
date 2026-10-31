@@ -82,7 +82,7 @@ export function renderMarkdown(input: DigestInput): string {
   const { runs, baselineDays } = input;
   const base = runs[0]?.row.date ?? input.generatedAt;
   const baselinePool = input.baselineRuns?.length ? input.baselineRuns : runs;
-  const stats = windowStats(baselinePool.map((r) => r.row), baselineDays, base);
+  const stats = windowStats(baselinePool, baselineDays, base);
   const out: string[] = [];
 
   out.push(`# Training digest — ${iso(input.generatedAt)}`);
