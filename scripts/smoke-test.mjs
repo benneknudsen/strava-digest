@@ -3219,6 +3219,17 @@ try {
   check('formatMb: 100 MiB vises uden decimal', formatMb(100 * MB), (v) => v === '100 MB');
   check('formatMb: 10.04 MiB rundes ned til 10 MB', formatMb(Math.floor(10.04 * MB)), (v) => v === '10 MB');
   check('formatMb: 10.06 MiB rundes op til 10.1 MB', formatMb(Math.floor(10.06 * MB)), (v) => v === '10.1 MB');
+  check('formatMb: en størrelse under grænsen ændrer sig ikke', formatMb(Math.floor(99.6 * MB)), (v) => v === '99.6 MB');
+
+  // Issue #44: an oversized file must never be described as exactly the limit.
+  check('error: 100.04 MiB over 100 MB-grænsen vises ikke som 100 MB', tooLargeError('activities.csv', Math.floor(100.04 * MB)).message, (v) =>
+    v ===
+    'activities.csv is 100.04 MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size.',
+  );
+  check('error: en byte over grænsen vises strengt over den', tooLargeError('activities.csv', 100 * MB + 1).message, (v) =>
+    v ===
+    'activities.csv is 100.01 MB, which is larger than the 100 MB limit for export files — a Strava export does not ship export files that size.',
+  );
 
   // Issue #34: an unknown size must not be reported as the counted bytes.
   check('error: ukendt størrelse siger more than limit', tooLargeError('activities.csv', null).message, (v) =>

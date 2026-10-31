@@ -91,8 +91,13 @@ If the user has it somewhere else, pass it explicitly:
 strava-digest <path> --context /path/to/context.md
 ```
 
-If there is no context file, the digest says so and the answer is limited to
-describing the data. Ask the user for their plan instead of inventing one.
+If there is no readable context file, the digest simply has no context
+section — `CONTEXT` in the agent format, `Context (from you)` in Markdown. It
+does not say that the file is missing. The default `./context.md` is silent
+when it is absent; only an explicit `--context` path that cannot be read
+prints a warning on stderr, and the tool then continues without it. A missing
+section therefore means no context was available, not that the digest is
+complete. Ask the user for their plan instead of inventing one.
 
 Users can start from `context.example.md`.
 
