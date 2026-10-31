@@ -1,7 +1,7 @@
 // Smoke-test: genererer syntetiske fixtures (ingen persondata), kører hele
 // pipelinen og fejler hvis nøgletallene ikke stemmer. Kør med `npm test`.
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { constants as osConstants, tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -31,8 +31,29 @@ import { normalizeType, parseActivities, RUN_TYPES } from '../src/strava.ts';
 import { boundariesFromMaxHr, resolveZoneConfig, zoneIndex } from '../src/zones.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'strava-digest-test-'));
+/** Kanonisk sti: på macOS er /var en symlink til /private/var. */
+const tmpReal = realpathSync(tmp);
 /** Rodden i repoet, så tests kan kalde CLI'en med absolut sti. */
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+const cliPath = join(repoRoot, 'src', 'cli.ts');
+/**
+ * Alle CLI-kørsler starter i en tom mappe, så standardstien `./context.md`
+ * ikke kan pege ind i repoet (eller hvor testen ellers køres fra). En test
+ * der vil prøve standardkonteksten giver selv en `cwd` (se context-testen).
+ */
+const isolatedCwd = join(tmp, 'isolated-cwd');
+mkdirSync(isolatedCwd, { recursive: true });
+/**
+ * Standardindstillingerne for enhver CLI-kørsel. Baade runCli og probe-testen
+ * nedenfor bruger denne funktion, saa en aendring af standard-cwd'en rammer
+ * begge.
+ */
+function defaultRunOptions() {
+  return { cwd: isolatedCwd };
+}
+function runCli(args, options = {}) {
+  return execFileSync(process.execPath, [cliPath, ...args], { ...defaultRunOptions(), ...options });
+}
 
 /**
  * Byg et syntetisk løb til agent-format-tests. Har samme facade som
@@ -123,7 +144,7 @@ function makeFitZones({ maxHr, zoneHighs }) {
 }
 
 try {
-  execFileSync('node', ['scripts/make-fixtures.mjs', tmp], { stdio: 'inherit' });
+  execFileSync(process.execPath, [join(repoRoot, 'scripts', 'make-fixtures.mjs'), tmp], { stdio: 'inherit', cwd: isolatedCwd });
 
   const source = await openSource(tmp);
   const found = findActivitiesCsv(source);
@@ -434,7 +455,7 @@ try {
   await source.close();
 
   // CLI-vejen på samme mappe. Standardformatet er agent-formatet.
-  const cli = execFileSync('node', ['src/cli.ts', tmp, '--last', '2'], { encoding: 'utf8' });
+  const cli = runCli([tmp, '--last', '2'], { encoding: 'utf8' });
   check('CLI skriver agent-digest', cli.includes('# STRAVA DIGEST v2 (agent-format)'), (v) => v === true);
   check('CLI har SCHEMA-sektion', cli.includes('## SCHEMA'), (v) => v === true);
   check('CLI viser HR-drift som felt', /drift=-?\d/.test(cli), (v) => v === true);
@@ -449,7 +470,7 @@ try {
   );
 
   // Markdown-formatet er stadig tilgængeligt med --format md
-  const cliMd = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--format', 'md'], { encoding: 'utf8' });
+  const cliMd = runCli([tmp, '--last', '2', '--max-hr', '240', '--format', 'md'], { encoding: 'utf8' });
   check('--format md giver menneske-Markdown', cliMd.includes('# Training digest'), (v) => v === true);
   check('--format md viser Zoner-linje', cliMd.includes('- **Zones:** Z1 '), (v) => v === true);
   check('--format md viser baseline-roligt', cliMd.includes('easy (Z1–Z2)'), (v) => v === true);
@@ -457,7 +478,7 @@ try {
   // issue #21 punkt 1: --format må kun acceptere de to kendte værdier.
   let badFormatErr = null;
   try {
-    execFileSync('node', ['src/cli.ts', tmp, '--format', 'json'], {
+    runCli([tmp, '--format', 'json'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -474,7 +495,7 @@ try {
   // unknown flag or a value flag without a value must fail loudly.
   const cliFailure = (args) => {
     try {
-      execFileSync('node', ['src/cli.ts', ...args], {
+      runCli(args, {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -488,7 +509,7 @@ try {
     status: badFormatEqualsErr?.status ?? null,
     message: String(badFormatEqualsErr?.stderr ?? ''),
   }, (v) => v.status === 1 && v.message === String(badFormatErr?.stderr ?? ''));
-  const cliMdEquals = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--format=md'], {
+  const cliMdEquals = runCli([tmp, '--last', '2', '--format=md'], {
     encoding: 'utf8',
   });
   check('--format=md giver menneske-Markdown', cliMdEquals.includes('# Training digest'), (v) => v === true);
@@ -524,17 +545,17 @@ try {
     }
   }
 
-  const cliAgent = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--format', 'agent'], { encoding: 'utf8' });
+  const cliAgent = runCli([tmp, '--last', '2', '--format', 'agent'], { encoding: 'utf8' });
   check('--format agent giver agent-format', cliAgent.includes('# STRAVA DIGEST v2 (agent-format)'), (v) => v === true);
 
   const cliJson = JSON.parse(
-    execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240', '--json'], { encoding: 'utf8' }),
+    runCli([tmp, '--last', '2', '--max-hr', '240', '--json'], { encoding: 'utf8' }),
   );
   check('--max-hr giver zoneSource flag', cliJson.runs[0]?.analysis?.zoneSource ?? null, (v) => v === 'flag');
   check('--max-hr sætter zoneMaxHr', cliJson.runs[0]?.analysis?.zoneMaxHr ?? null, (v) => v === 240);
   check('zoneprocenter i JSON summer til 100', cliJson.runs[0]?.analysis?.zonePct?.reduce((s, p) => s + p, 0) ?? null, (v) => v != null && Math.abs(v - 100) < 1);
 
-  const cliZones = execFileSync('node', ['src/cli.ts', tmp, '--last', '2', '--max-hr', '240'], { encoding: 'utf8' });
+  const cliZones = runCli([tmp, '--last', '2', '--max-hr', '240'], { encoding: 'utf8' });
   check('CLI-agent viser zonefordeling', /z=\d/.test(cliZones), (v) => v === true);
   check('CLI-agent markerer zonekilden', cliZones, (v) => /^max_hr=240 source=flag$/m.test(v));
 
@@ -542,7 +563,7 @@ try {
   // zone-grundlag. Før stod headeren "max_hr=199 source=export-observation"
   // mens turene havde z=- og load=-, altså en header der løj. Nu skal de
   // to være enige.
-  const cliNoHr = execFileSync('node', ['src/cli.ts', tmp], { encoding: 'utf8' });
+  const cliNoHr = runCli([tmp], { encoding: 'utf8' });
   const noHrHeader = cliNoHr.match(/^max_hr=(\d+) source=([\w-]+)$/m);
   check('uden --max-hr er der en max-puls i headeren', noHrHeader?.[1], (v) => v !== undefined);
   check('uden --max-hr er kilden export-observation', noHrHeader?.[2], (v) => v === 'export-observation');
@@ -600,7 +621,7 @@ try {
   check('dropped rows: stats counts skipped rows', gapsParsed.stats.skippedNoDate, (v) => v === 2);
   check('dropped rows: stats counts skipped rows without a file', gapsParsed.stats.skippedNoDateNoFilename, (v) => v === 1);
 
-  const gapsAgent = execFileSync('node', ['src/cli.ts', gapsDir], { encoding: 'utf8' });
+  const gapsAgent = runCli([gapsDir], { encoding: 'utf8' });
   check('dropped rows: skipped note names a missing or unparsable date', gapsAgent, (v) =>
     /^- 2 rows were skipped because of a missing or unparsable date and are not in the digest \(1 of them was also without a file name\)\.$/m.test(v),
   );
@@ -634,7 +655,7 @@ try {
   ]);
   copyGoodGpx(nonRunDir);
 
-  const nonRunAgent = execFileSync('node', ['src/cli.ts', nonRunDir], { encoding: 'utf8' });
+  const nonRunAgent = runCli([nonRunDir], { encoding: 'utf8' });
   check('s4 without --all: skipped note only', nonRunAgent, (v) =>
     /^- 1 row was skipped because of a missing or unparsable date and is not in the digest\.$/m.test(v),
   );
@@ -648,7 +669,7 @@ try {
     /^runs_in_export=1$/m.test(v),
   );
 
-  const nonRunAll = execFileSync('node', ['src/cli.ts', nonRunDir, '--all'], { encoding: 'utf8' });
+  const nonRunAll = runCli([nonRunDir, '--all'], { encoding: 'utf8' });
   check('s4 with --all: skipped note', nonRunAll, (v) =>
     /^- 1 row was skipped because of a missing or unparsable date and is not in the digest\.$/m.test(v),
   );
@@ -671,7 +692,7 @@ try {
   ]);
   copyGoodGpx(s2Dir);
 
-  const s2Agent = execFileSync('node', ['src/cli.ts', s2Dir], { encoding: 'utf8' });
+  const s2Agent = runCli([s2Dir], { encoding: 'utf8' });
   check('s2 without --all: no coverage notes', s2Agent, (v) =>
     !v.includes('skipped because of a missing or unparsable date') &&
     !v.includes('included from the CSV without track analysis'),
@@ -680,7 +701,7 @@ try {
     !v.includes('n="Gym"'),
   );
 
-  const s2All = execFileSync('node', ['src/cli.ts', s2Dir, '--all'], { encoding: 'utf8' });
+  const s2All = runCli([s2Dir, '--all'], { encoding: 'utf8' });
   check('s2 with --all: included note without a drop note', s2All, (v) =>
     /^- 1 row has no file name, so it has no track analysis; its distance and time come from the CSV\.$/m.test(v),
   );
@@ -704,8 +725,8 @@ try {
     '2,"Oct 11, 2026, 6:32:10 AM",No file B,Løb,1800,1800,5.0,170,150,',
   ]);
 
-  const s5Agent = execFileSync('node', ['src/cli.ts', s5Dir], { encoding: 'utf8' });
-  const s5All = execFileSync('node', ['src/cli.ts', s5Dir, '--all'], { encoding: 'utf8' });
+  const s5Agent = runCli([s5Dir], { encoding: 'utf8' });
+  const s5All = runCli([s5Dir, '--all'], { encoding: 'utf8' });
   for (const [label, output] of [['without --all', s5Agent], ['with --all', s5All]]) {
     check(`s5 ${label}: included note without a drop note`, output, (v) =>
       /^- 2 rows have no file name, so they have no track analysis; their distance and time come from the CSV\.$/m.test(v),
@@ -723,7 +744,7 @@ try {
   ]);
   copyGoodGpx(noDropDir);
 
-  const noDropAgent = execFileSync('node', ['src/cli.ts', noDropDir], { encoding: 'utf8' });
+  const noDropAgent = runCli([noDropDir], { encoding: 'utf8' });
   check('no drops: no skipped note', noDropAgent, (v) =>
     !v.includes('skipped because of a missing or unparsable date'),
   );
@@ -743,16 +764,16 @@ try {
   ]);
   copyGoodGpx(paceDir);
 
-  const paceAgent = execFileSync('node', ['src/cli.ts', paceDir], { encoding: 'utf8' });
+  const paceAgent = runCli([paceDir], { encoding: 'utf8' });
   check('agent WINDOW: time still counts rows without distance', paceAgent, (v) =>
     /^recent: n=2 km=5\.0 t=3600 pace=360\.0 hr=150 .* without_analysis=1$/m.test(v),
   );
-  const paceMd = execFileSync('node', ['src/cli.ts', paceDir, '--format', 'md'], { encoding: 'utf8' });
+  const paceMd = runCli([paceDir, '--format', 'md'], { encoding: 'utf8' });
   check('windowStats: Markdown baseline pace ignores rows without distance', paceMd, (v) =>
     /^- average: 6:00\/km · heart rate 150$/m.test(v),
   );
   const paceJson = JSON.parse(
-    execFileSync('node', ['src/cli.ts', paceDir, '--json'], { encoding: 'utf8' }),
+    runCli([paceDir, '--json'], { encoding: 'utf8' }),
   );
   check('windowStats: JSON markdown baseline pace ignores rows without distance', paceJson.markdown, (v) =>
     /^- average: 6:00\/km · heart rate 150$/m.test(v),
@@ -772,16 +793,14 @@ try {
   copyGoodGpx(outsideLastDir);
   const outsideNote =
     '1 row has no file name, so it has no track analysis; its distance and time come from the CSV.';
-  const outsideAgent = execFileSync('node', ['src/cli.ts', outsideLastDir, '--last', '2'], {
+  const outsideAgent = runCli([outsideLastDir, '--last', '2'], {
     encoding: 'utf8',
   });
-  const outsideMd = execFileSync(
-    'node',
-    ['src/cli.ts', outsideLastDir, '--last', '2', '--format', 'md'],
-    { encoding: 'utf8' },
-  );
+  const outsideMd = runCli([outsideLastDir, '--last', '2', '--format', 'md'], {
+    encoding: 'utf8',
+  });
   const outsideJson = JSON.parse(
-    execFileSync('node', ['src/cli.ts', outsideLastDir, '--last', '2', '--json'], {
+    runCli([outsideLastDir, '--last', '2', '--json'], {
       encoding: 'utf8',
     }),
   );
@@ -808,7 +827,7 @@ try {
   ]);
   copyGoodGpx(maxHrDir);
 
-  const maxHrAgent = execFileSync('node', ['src/cli.ts', maxHrDir], { encoding: 'utf8' });
+  const maxHrAgent = runCli([maxHrDir], { encoding: 'utf8' });
   check('max HR: observed max includes no-file rows', maxHrAgent, (v) =>
     /^max_hr=190 source=export-observation$/m.test(v),
   );
@@ -822,7 +841,7 @@ try {
   const undatedMaxHrStats = parseActivities(undatedMaxHrTable, mapColumns(undatedMaxHrTable)).stats;
   check('max HR: skipped rows expose their max HR', undatedMaxHrStats.maxHrOfSkipped, (v) => v === 200);
 
-  const undatedMaxHrAgent = execFileSync('node', ['src/cli.ts', undatedMaxHrDir], { encoding: 'utf8' });
+  const undatedMaxHrAgent = runCli([undatedMaxHrDir], { encoding: 'utf8' });
   check('max HR: observed max includes undated rows', undatedMaxHrAgent, (v) =>
     /^max_hr=200 source=export-observation$/m.test(v),
   );
@@ -838,7 +857,7 @@ try {
   const zeroMaxHrTable = parseCsv(readFileSync(join(zeroMaxHrDir, 'activities.csv'), 'utf8'));
   const zeroMaxHrStats = parseActivities(zeroMaxHrTable, mapColumns(zeroMaxHrTable)).stats;
   check('max HR: undated row with maxHr 0 gives null, not 0', zeroMaxHrStats.maxHrOfSkipped, (v) => v === null);
-  const zeroMaxHrAgent = execFileSync('node', ['src/cli.ts', zeroMaxHrDir], { encoding: 'utf8' });
+  const zeroMaxHrAgent = runCli([zeroMaxHrDir], { encoding: 'utf8' });
   check('max HR: a zero maxHr on a skipped row cannot become the observed max', zeroMaxHrAgent, (v) =>
     /^max_hr=174 source=export-observation$/m.test(v),
   );
@@ -846,7 +865,7 @@ try {
     /^- max_hr=200 is the highest Max Heart Rate value in the activities CSV \(observed\), not your watch's own max HR; heart-rate samples in the track files are not scanned\. Strava's bulk export does not contain the watch's zone configuration, so the zone boundaries are a best guess\.$/m.test(v),
   );
 
-  const gapsList = execFileSync('node', ['src/cli.ts', gapsDir, '--list'], { encoding: 'utf8' });
+  const gapsList = runCli([gapsDir, '--list'], { encoding: 'utf8' });
   check('dropped rows: --list total is the CSV row count', gapsList, (v) =>
     /^4 activities in total \(shown: 2\)$/m.test(v),
   );
@@ -865,12 +884,12 @@ try {
     '1,"Oct 11, 2026, 6:32:10 AM",Good,Løb,1800,1800,5.0,170,150,Good.gpx',
   ]);
   copyGoodGpx(oneRowDir);
-  const oneRowList = execFileSync('node', ['src/cli.ts', oneRowDir, '--list'], { encoding: 'utf8' });
+  const oneRowList = runCli([oneRowDir, '--list'], { encoding: 'utf8' });
   check('bulk --list: one activity uses the singular label', oneRowList, (v) =>
     /^1 activity in total \(shown: 1\)$/m.test(v),
   );
 
-  const gapsMd = execFileSync('node', ['src/cli.ts', gapsDir, '--format', 'md'], { encoding: 'utf8' });
+  const gapsMd = runCli([gapsDir, '--format', 'md'], { encoding: 'utf8' });
   check('dropped rows: Markdown total is the CSV row count', gapsMd, (v) =>
     /^Source: .*· 4 activities in export · 2 runs in digest$/m.test(v),
   );
@@ -891,7 +910,7 @@ try {
       '1,"Oct 12, 2026, 6:32:10 AM",Manual,Løb,1800,1800,5.0,170,150,42,Nike Pegasus,',
     ].join('\n') + '\n',
   );
-  const metadataMd = execFileSync('node', ['src/cli.ts', metadataDir, '--format', 'md'], {
+  const metadataMd = runCli([metadataDir, '--format', 'md'], {
     encoding: 'utf8',
   });
   check('Markdown viser RE og gear for no-file-rækker', metadataMd, (v) =>
@@ -902,8 +921,7 @@ try {
   // Det er diagnostik, ikke træningsdata — tallet og en henvisning er nok.
   // Derfor laves der en eksport med en ekstra, ukendt kolonne.
   const extraCsv = join(tmp, 'activities.csv');
-  const extraDir = join(tmp, '..', `strava-extra-${Date.now()}`);
-  mkdirSync(extraDir, { recursive: true });
+  const extraDir = scratch('extra');
   const srcCsv = readFileSync(extraCsv, 'utf8');
   const lines = srcCsv.split('\n');
   const header = lines[0] ?? '';
@@ -912,8 +930,8 @@ try {
     ...lines.slice(1).filter(Boolean).map((l) => l + ',12,3'),
   ].join('\n');
   writeFileSync(join(extraDir, 'activities.csv'), withExtra);
-  const extraAgent = execFileSync('node', ['src/cli.ts', extraDir], { encoding: 'utf8' });
-  const extraMd = execFileSync('node', ['src/cli.ts', extraDir, '--format', 'md'], { encoding: 'utf8' });
+  const extraAgent = runCli([extraDir], { encoding: 'utf8' });
+  const extraMd = runCli([extraDir, '--format', 'md'], { encoding: 'utf8' });
 
   check('agent-formatet tæller uventede kolonner i stedet for at liste dem', extraAgent, (v) =>
     /\d+ populated Strava export columns are not mapped — some may be training data\. Run with --format md to list their names; a missing alias is one line\./.test(v) &&
@@ -930,8 +948,8 @@ try {
   // valgfri - den skal og den skal give samme svar som kilden.
   const distCli = join(repoRoot, 'dist', 'cli.js');
   if (existsSync(distCli)) {
-    const distOut = execFileSync('node', [distCli, tmp], { encoding: 'utf8' });
-    const srcOut = execFileSync('node', [join(repoRoot, 'src', 'cli.ts'), tmp], { encoding: 'utf8' });
+    const distOut = execFileSync(process.execPath, [distCli, tmp], { encoding: 'utf8', cwd: isolatedCwd });
+    const srcOut = runCli([tmp], { encoding: 'utf8' });
     const strip = (s) => s.split('\n').filter((l) => !l.startsWith('generated=')).join('\n');
     check('bygget output er identisk med kilden', strip(distOut), (v) => v === strip(srcOut));
   } else {
@@ -962,25 +980,35 @@ try {
     !v.includes('zoner bruger') && !v.includes('ingen kilde'),
   );
 
-  const cliList = execFileSync('node', ['src/cli.ts', tmp, '--list'], { encoding: 'utf8' });
+  const cliList = runCli([tmp, '--list'], { encoding: 'utf8' });
   check('--list viser zone-status', cliList.includes('zones: no'), (v) => v === true);
 
   // --find: maskinlæsbart, én sti pr. linje, exit-kode der afslører fund.
-  // Køres med fixture'en som cwd, så den scanner den og ikke repoet.
-  const cliPath = join(repoRoot, 'src', 'cli.ts');
-  const findOut = execFileSync('node', [cliPath, '--find'], { encoding: 'utf8', cwd: tmp });
+  // Køres med fixture'en som cwd og en temp-HOME, så den kun scanner testens
+  // egne mapper — aldrig brugerens ~/Downloads eller ~/Desktop.
+  const findHome = join(tmp, 'find-home');
+  mkdirSync(join(findHome, 'Downloads'), { recursive: true });
+  mkdirSync(join(findHome, 'Desktop'), { recursive: true });
+  const findEnv = { ...process.env, HOME: findHome, USERPROFILE: findHome };
+  const findOut = runCli(['--find'], { encoding: 'utf8', cwd: tmp, env: findEnv });
   const findLines = findOut.trim().split('\n').filter(Boolean);
   // Stier er absolutte, men formatet afhænger af OS: /home/... på Unix,
   // C:\Users\... på Windows. Begge skal accepteres.
   const isAbsolute = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);
   check('--find printer absolutte stier uden nummerering', findLines.every(isAbsolute), (v) => v === true);
-  check('--find finder eksportmappen', findOut.includes(tmp), (v) => v === true);
+  // Netop den eksport-mappe testen selv lavede — ikke bare en vilkårlig
+  // kandidat under temp-området. tmpReal er den kanoniske sti, som
+  // process.cwd() giver barnet, også hvor tmpdir er et symlink (macOS).
+  check('--find finder eksportmappen', findLines, (v) => v.includes(tmpReal));
   check('--find har ingen overskrift', !findOut.includes('Kandidat') && !findOut.includes('Vælg') && !findOut.includes('Pick a number'), (v) => v === true);
   check('--find kører uden TTY', findOut.length > 0, (v) => v === true);
+  check('--find læser ikke uden for temp-området', findLines, (v) =>
+    v.every((p) => [tmp, tmpReal].some((root) => p === root || p.startsWith(root + sep))),
+  );
 
   // --install-skill: kopierer skillen, så agenten kan bruge værktøjet
   const skillDir = join(tmp, 'skills', 'strava-digest');
-  const instOut = execFileSync('node', [cliPath, '--install-skill', join(tmp, 'skills')], { encoding: 'utf8' });
+  const instOut = runCli(['--install-skill', join(tmp, 'skills')], { encoding: 'utf8' });
   check('--install-skill skriver SKILL.md', existsSync(join(skillDir, 'SKILL.md')), (v) => v === true);
 
   // Skillen installeres fra pakken, saa dens version skal vaere den samme
@@ -1016,7 +1044,7 @@ try {
   const skillRoot2 = join(tmp, 'skills2');
   mkdirSync(join(skillRoot2, 'kategori', 'strava-digest'), { recursive: true });
   writeFileSync(join(skillRoot2, 'kategori', 'strava-digest', 'SKILL.md'), '---\nname: strava-digest\n---\ntilpasset\n');
-  execFileSync('node', [cliPath, '--install-skill', skillRoot2], { encoding: 'utf8' });
+  runCli(['--install-skill', skillRoot2], { encoding: 'utf8' });
   check('eksisterende skill opdateres in place', (await readFile(join(skillRoot2, 'kategori', 'strava-digest', 'SKILL.md'), 'utf8')).includes('When to Use'), (v) => v === true);
   check('tilpasset version sikkerhedskopieres', existsSync(join(skillRoot2, 'kategori', 'strava-digest', 'SKILL.md.bak')), (v) => v === true);
   check('ingen duplikat-skill dannes', existsSync(join(skillRoot2, 'strava-digest')), (v) => v === false);
@@ -1038,7 +1066,7 @@ try {
     return { dir, file: join(dir, 'SKILL.md'), env: { ...process.env, HOME: home, USERPROFILE: home } };
   }
   const runInstall = (env) =>
-    execFileSync('node', [cliPath, '--install-skill'], { encoding: 'utf8', env });
+    runCli(['--install-skill'], { encoding: 'utf8', env });
 
   const userSkill = '# Min egen skill\n\nmax-puls: 189 (min egen)\n';
   const user = fakeHome('home', userSkill);
@@ -1122,7 +1150,7 @@ try {
 
   let hrErr = null;
   try {
-    execFileSync('node', ['src/cli.ts', tmp, '--max-hr', '0'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    runCli([tmp, '--max-hr', '0'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     hrErr = err;
   }
@@ -1135,7 +1163,7 @@ try {
 
   const looseDir = join(tmp, 'activities');
   const looseSingle = JSON.parse(
-    execFileSync('node', ['src/cli.ts', join(looseDir, 'Run-1001.gpx'), '--json'], { encoding: 'utf8' }),
+    runCli([join(looseDir, 'Run-1001.gpx'), '--json'], { encoding: 'utf8' }),
   );
   check('loose fil: dato kommer fra filen', looseSingle.runs[0]?.row?.date?.slice(0, 10) ?? null, (v) => v === '2026-10-12');
   check('loose fil: type kommer fra GPX <type>', looseSingle.runs[0]?.row?.type ?? null, (v) => v === 'running');
@@ -1145,20 +1173,20 @@ try {
   check('loose fil: RE, udstyr og kalorier udeladt', [looseSingle.runs[0]?.row?.relativeEffort, looseSingle.runs[0]?.row?.gear, looseSingle.runs[0]?.row?.calories], (v) => v[0] === null && v[1] === '' && v[2] === null);
   check('loose fil: header siger metadata fra filen', String(looseSingle.sourceLabel), (v) => v.includes('(file)') && v.includes('metadata read from the file'));
 
-  const looseDirMd = execFileSync('node', ['src/cli.ts', looseDir, '--last', '3', '--format', 'md'], { encoding: 'utf8' });
+  const looseDirMd = runCli([looseDir, '--last', '3', '--format', 'md'], { encoding: 'utf8' });
   check('loose mappe: header siger mappe og metadata fra filerne', looseDirMd, (v) => v.includes('(folder, 4 activity files)') && v.includes('metadata read from the files'));
   check('loose mappe: noten siger at navnet kommer fra filnavnet', looseDirMd, (v) => v.includes('Without activities.csv') && v.includes('uses the file names'));
   check('loose mappe: fil uden brugbar tid sprunget over med note', looseDirMd, (v) => v.includes('file skipped') && v.includes('UdenTid.gpx'));
   check('loose mappe: tre løb i digesten', looseDirMd, (v) => v.includes('3 runs in digest'));
 
-  const looseZones = execFileSync('node', ['src/cli.ts', looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });
+  const looseZones = runCli([looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });
   check('loose: zoner med --max-hr', looseZones, (v) =>
     /z=\d/.test(v) && /^max_hr=240 source=flag$/m.test(v),
   );
 
   // --last begrænser kun de løb der beskrives. WEEKS, WINDOW og STATS skal
   // stadig tælle hele mappen, også når kun de to nyeste vises.
-  const looseLast = execFileSync('node', ['src/cli.ts', looseDir, '--last', '2'], { encoding: 'utf8' });
+  const looseLast = runCli([looseDir, '--last', '2'], { encoding: 'utf8' });
   check('loose --last 2: WINDOW tæller alle 3 løb', looseLast, (v) => /^recent: n=3 /m.test(v));
   check('loose --last 2: STATS tæller alle 3 løb', looseLast, (v) =>
     // Uden --max-hr har ingen af de løse filer zoner, så ingen har et
@@ -1169,7 +1197,7 @@ try {
     /^- 3 runs are counted in WEEKS, WINDOW and STATS; 2 runs are shown \(--last\)\.$/m.test(v),
   );
 
-  const looseList = execFileSync('node', ['src/cli.ts', looseDir, '--list'], { encoding: 'utf8' });
+  const looseList = runCli([looseDir, '--list'], { encoding: 'utf8' });
   check('loose --list viser filnavn og zone-status', looseList, (v) => v.includes('Run-1001.gpx') && v.includes('zones: no'));
   check('loose --list: host note says names come from the file names', looseList, (v) =>
     v.includes('Without activities.csv') && v.includes('uses the file names'),
@@ -1191,13 +1219,13 @@ try {
   writeFileSync(join(looseTypeDir, 'Cykel.gpx'), typedXml('Cykling', '02'));
   let looseTypeJson = null;
   try {
-    looseTypeJson = JSON.parse(execFileSync('node', ['src/cli.ts', looseTypeDir, '--json'], { encoding: 'utf8' }));
+    looseTypeJson = JSON.parse(runCli([looseTypeDir, '--json'], { encoding: 'utf8' }));
   } catch {
     looseTypeJson = null;
   }
   check('loose type: Löpning tælles som løb i digesten', looseTypeJson?.runs?.length ?? null, (v) => v === 1);
   check('loose type: Löpning har isRun=true', looseTypeJson?.runs?.[0]?.row?.isRun ?? null, (v) => v === true);
-  const looseTypeAll = JSON.parse(execFileSync('node', ['src/cli.ts', looseTypeDir, '--all', '--json'], { encoding: 'utf8' }));
+  const looseTypeAll = JSON.parse(runCli([looseTypeDir, '--all', '--json'], { encoding: 'utf8' }));
   check('loose type: Cykling er stadig ikke et løb', looseTypeAll.runs.find((r) => r.row.name === 'Cykel')?.row?.isRun ?? null, (v) => v === false);
 
   /* ---- issue #32: en loose-fil med en umulig dato må ikke flytte ankeret ---- */
@@ -1221,8 +1249,8 @@ try {
   }
   writeFileSync(join(anchorFutureDir, 'Fremtid2099.gpx'), futureXml);
 
-  const anchorBase = execFileSync('node', ['src/cli.ts', anchorDir], { encoding: 'utf8' });
-  const anchorFuture = execFileSync('node', ['src/cli.ts', anchorFutureDir], { encoding: 'utf8' });
+  const anchorBase = runCli([anchorDir], { encoding: 'utf8' });
+  const anchorFuture = runCli([anchorFutureDir], { encoding: 'utf8' });
   const section = (text, from, to) => {
     const start = text.indexOf(from);
     const end = to ? text.indexOf(to, start) : -1;
@@ -1295,7 +1323,7 @@ try {
 
   enkeltRoot = mkdtempSync(join(tmpdir(), 'strava-digest-enkelt-'));
   writeFileSync(join(enkeltRoot, 'Enkelt.gpx'), onePointXml);
-  const enkeltList = execFileSync('node', ['src/cli.ts', enkeltRoot, '--list'], { encoding: 'utf8' });
+  const enkeltList = runCli([enkeltRoot, '--list'], { encoding: 'utf8' });
   check('loose --list: énpunktsfil sprunget over med grund', enkeltList, (v) => v.includes('Enkelt.gpx') && v.includes('(skipped)') && v.includes('only 1 point'));
   check('loose --list: one file uses the singular label', enkeltList, (v) =>
     /^1 activity file in total \(shown: 1\)$/m.test(v),
@@ -1306,7 +1334,7 @@ try {
   copyFileSync(join(looseDir, 'UdenTid.gpx'), join(allSkippedDir, 'tur2.gpx'));
   let allSkippedErr = null;
   try {
-    execFileSync('node', ['src/cli.ts', allSkippedDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    runCli([allSkippedDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     allSkippedErr = err;
   }
@@ -1316,7 +1344,7 @@ try {
 
   let oneSkippedErr = null;
   try {
-    execFileSync('node', ['src/cli.ts', enkeltRoot], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    runCli([enkeltRoot], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     oneSkippedErr = err;
   }
@@ -1329,7 +1357,7 @@ try {
   writeFileSync(join(noRunDir, 'tur.gpx'), onePointXml);
   let noRunErr = null;
   try {
-    execFileSync('node', ['src/cli.ts', noRunDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    runCli([noRunDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     noRunErr = err;
   }
@@ -1339,7 +1367,7 @@ try {
 
   let looseErr = null;
   try {
-    execFileSync('node', ['src/cli.ts', join(looseDir, 'UdenTid.gpx')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    runCli([join(looseDir, 'UdenTid.gpx')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     looseErr = err;
   }
@@ -1350,7 +1378,7 @@ try {
   writeFileSync(join(emptyDir, 'note.txt'), 'ingen aktiviteter her');
   let emptyErr = null;
   try {
-    execFileSync('node', ['src/cli.ts', emptyDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    runCli([emptyDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     emptyErr = err;
   }
@@ -1376,7 +1404,7 @@ try {
   }, (v) => v.bak === false && v.plain === true);
   const fitBakCandidates = await discoverSources([fitBakDir]);
   check('discover: mid-name .fit tælles ikke som aktivitetsfil', fitBakCandidates.find((c) => c.path === fitBakDir)?.count ?? null, (v) => v === 1);
-  const fitBakList = execFileSync('node', ['src/cli.ts', fitBakDir, '--list'], { encoding: 'utf8' });
+  const fitBakList = runCli([fitBakDir, '--list'], { encoding: 'utf8' });
   check('loose --list: kun Tur2.fit er en aktivitet', fitBakList, (v) =>
     !v.includes('Tur.fit.bak') && v.includes('Tur2.fit'),
   );
@@ -1422,8 +1450,8 @@ try {
   // være identiske: intet må tabes i pipen.
   const bigDir = join(tmp, 'stor');
   mkdirSync(bigDir, { recursive: true });
-  execFileSync('node', ['scripts/make-fixtures.mjs', bigDir, '800'], { stdio: 'inherit' });
-  const bigPiped = execFileSync('node', ['src/cli.ts', bigDir, '--format', 'md'], {
+  execFileSync(process.execPath, [join(repoRoot, 'scripts', 'make-fixtures.mjs'), bigDir, '800'], { stdio: 'inherit', cwd: isolatedCwd });
+  const bigPiped = runCli([bigDir, '--format', 'md'], {
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   });
@@ -1433,7 +1461,7 @@ try {
   const outDir = join(tmp, 'ud');
   mkdirSync(outDir, { recursive: true });
   const bigFile = join(outDir, 'digest.md');
-  execFileSync('node', ['src/cli.ts', bigDir, '--format', 'md', '--out', bigFile]);
+  runCli([bigDir, '--format', 'md', '--out', bigFile]);
   const pipedBytes = Buffer.byteLength(bigPiped, 'utf8');
   check('stort digest er tydeligt over pipe-bufferen (64 KiB)', pipedBytes, (v) => v > 2 * 65536);
   check('pipe giver samme længde som --out', pipedBytes, (v) => v === statSync(bigFile).size);
@@ -1451,7 +1479,8 @@ try {
   // antal bytes der faktisk læses, og `read` er begrænset af bufferen —
   // ikke af digestets længde.
   const earlyClose = await new Promise((resolve) => {
-    const child = spawn('node', ['src/cli.ts', bigDir, '--format', 'md'], {
+    const child = spawn(process.execPath, [cliPath, bigDir, '--format', 'md'], {
+      ...defaultRunOptions(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';
@@ -1575,7 +1604,7 @@ try {
   const runsBlock = (out) => out.slice(out.indexOf('## RUNS'));
 
   const hikeTypesDir = writeHikeExport('hike-types', 'Løb');
-  const hikeTypesAgent = execFileSync('node', ['src/cli.ts', hikeTypesDir], { encoding: 'utf8' });
+  const hikeTypesAgent = runCli([hikeTypesDir], { encoding: 'utf8' });
   const hikeTypesRuns = runsBlock(hikeTypesAgent);
   check('hike types: runs_in_export counts only the real run', hikeTypesAgent, (v) =>
     /^runs_in_export=1$/m.test(v),
@@ -1586,7 +1615,7 @@ try {
     !v.includes('n="Randonnée"'),
   );
 
-  const hikeTypesList = execFileSync('node', ['src/cli.ts', hikeTypesDir, '--list'], { encoding: 'utf8' });
+  const hikeTypesList = runCli([hikeTypesDir, '--list'], { encoding: 'utf8' });
   check('hike types: --list still counts all four activities', hikeTypesList, (v) =>
     /^4 activities in total \(shown: 4\)$/m.test(v),
   );
@@ -1597,7 +1626,7 @@ try {
     !/RUN\s+Wanderung/.test(v) && !/RUN\s+Wandeling/.test(v) && !/RUN\s+Randonnée/.test(v),
   );
 
-  const hikeTypesAll = execFileSync('node', ['src/cli.ts', hikeTypesDir, '--all'], { encoding: 'utf8' });
+  const hikeTypesAll = runCli([hikeTypesDir, '--all'], { encoding: 'utf8' });
   check('hike types: --all still shows every walk in RUNS', runsBlock(hikeTypesAll), (v) =>
     v.includes('n="Wanderung"') && v.includes('n="Wandeling"') && v.includes('n="Randonnée"'),
   );
@@ -1617,7 +1646,7 @@ try {
 
   for (const type of ['Run', 'Lauf', 'Löpning']) {
     const dir = writeHikeExport(`hike-types-${type.toLowerCase().replace(/[^a-z]/g, '')}`, type);
-    const out = execFileSync('node', ['src/cli.ts', dir], { encoding: 'utf8' });
+    const out = runCli([dir], { encoding: 'utf8' });
     check(`hike types: normal "${type}" still counts as a run`, runsBlock(out), (v) =>
       v.includes(`n="${type}"`),
     );
@@ -1772,7 +1801,7 @@ try {
   const numericDateDir = writeExport('numeric-date', [
     '1,12.10.2026,Date only,Løb,1800,1800,5.0,170,150,',
   ]);
-  const numericDateAgent = execFileSync(process.execPath, ['src/cli.ts', numericDateDir], { encoding: 'utf8' });
+  const numericDateAgent = runCli([numericDateDir], { encoding: 'utf8' });
   check('dato uden klokkeslæt: løbet havner på 12. oktober', numericDateAgent, (v) =>
     /^d=2026-10-12T00:00:00\.000Z /m.test(v),
   );
@@ -1790,7 +1819,7 @@ try {
     '5,"Oct 10, 2026, 6:32:10 AM",Run 5,Løb,1800,1800,5.0,170,150,',
     `6,${futureSlash},Future,Løb,1800,1800,5.0,170,150,`,
   ]);
-  const futureDateAgent = execFileSync(process.execPath, ['src/cli.ts', futureDateDir], { encoding: 'utf8' });
+  const futureDateAgent = runCli([futureDateDir], { encoding: 'utf8' });
   check('fremtidig række: WINDOW tæller kun de fem historiske løb', futureDateAgent, (v) =>
     /^recent: n=5 /m.test(v),
   );
@@ -2699,7 +2728,7 @@ try {
     try {
       return {
         status: 0,
-        stdout: execFileSync(process.execPath, [join(repoRoot, 'src', 'cli.ts'), ...args], {
+        stdout: runCli(args, {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe'],
         }),
@@ -2840,7 +2869,7 @@ try {
       { name: 'activities/Run-1003.gpx', data: readFileSync(join(tmp, 'activities/Run-1003.gpx')) },
     ]),
   );
-  const multibyteDigest = execFileSync(process.execPath, [cliPath, multibyteZip], {
+  const multibyteDigest = runCli([multibyteZip], {
     encoding: 'utf8',
     cwd: tmp,
   });
@@ -3296,6 +3325,7 @@ try {
         ['--require', namedPreload, cliPath, namedCsvZip],
         {
           encoding: 'utf8',
+          cwd: isolatedCwd,
           env: { ...process.env, STRAVA_DIGEST_MAX_RSS: namedRssFile },
           stdio: ['ignore', 'pipe', 'pipe'],
         },
@@ -3402,6 +3432,7 @@ try {
         ['--require', rssPreload, cliPath, gzBombZip],
         {
           encoding: 'utf8',
+          cwd: isolatedCwd,
           env: { ...process.env, STRAVA_DIGEST_MAX_RSS: rssFile },
           stdio: ['ignore', 'pipe', 'pipe'],
         },
@@ -3441,7 +3472,7 @@ try {
   const atomicDir = join(tmp, 'atomic-out');
   mkdirSync(atomicDir, { recursive: true });
   const atomicTarget = join(atomicDir, 'digest.md');
-  const atomicOk = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', atomicTarget], { encoding: 'utf8' });
+  const atomicOk = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', atomicTarget], { encoding: 'utf8', cwd: isolatedCwd });
   check('--out atomisk: exit 0', atomicOk.status, (v) => v === 0);
   check('--out atomisk: målet har digest-indhold', existsSync(atomicTarget) ? readFileSync(atomicTarget, 'utf8') : null, (v) => typeof v === 'string' && v.startsWith('# Training digest'));
   check('--out atomisk: ingen temp-fil tilbage', readdirSync(atomicDir).filter((n) => n !== 'digest.md'), (v) => v.length === 0);
@@ -3451,14 +3482,14 @@ try {
     const modeTarget = join(atomicDir, 'mode.md');
     writeFileSync(modeTarget, 'old digest\n');
     chmodSync(modeTarget, 0o600);
-    const modeRun = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', modeTarget], { encoding: 'utf8' });
+    const modeRun = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', modeTarget], { encoding: 'utf8', cwd: isolatedCwd });
     const keptMode = statSync(modeTarget).mode & 0o777;
     check('--out: eksisterende 0600 bevares', modeRun.status, (v) => v === 0);
     check('--out: eksisterende fils mode er 0600', keptMode, (v) => v === 0o600);
     console.log(`  mode: eksisterende fil = ${keptMode.toString(8)}`);
 
     const newModeTarget = join(atomicDir, 'new-mode.md');
-    const newModeRun = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', newModeTarget], { encoding: 'utf8' });
+    const newModeRun = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', newModeTarget], { encoding: 'utf8', cwd: isolatedCwd });
     const newMode = statSync(newModeTarget).mode & 0o777;
     const umaskMode = 0o666 & ~process.umask();
     check('--out: ny fil følger umask', newModeRun.status, (v) => v === 0);
@@ -3471,7 +3502,7 @@ try {
   // En mappe der ikke kan oprettes: den blokerende sti er urørt.
   const atomicBlocker = join(tmp, 'atomic-blocker');
   writeFileSync(atomicBlocker, 'keep me\n');
-  const atomicBlocked = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', join(atomicBlocker, 'digest.md')], { encoding: 'utf8' });
+  const atomicBlocked = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', join(atomicBlocker, 'digest.md')], { encoding: 'utf8', cwd: isolatedCwd });
   check('--out: umulig mappe fejler', atomicBlocked.status, (v) => v !== 0);
   check('--out: umulig mappe rører ikke gammelt indhold', readFileSync(atomicBlocker, 'utf8'), (v) => v === 'keep me\n');
 
@@ -3479,7 +3510,7 @@ try {
   const atomicDirTarget = join(tmp, 'atomic-target-dir');
   mkdirSync(atomicDirTarget, { recursive: true });
   writeFileSync(join(atomicDirTarget, 'old.txt'), 'old\n');
-  const atomicRenameFail = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', atomicDirTarget], { encoding: 'utf8' });
+  const atomicRenameFail = spawnSync(process.execPath, [cliPath, tmp, '--format', 'md', '--out', atomicDirTarget], { encoding: 'utf8', cwd: isolatedCwd });
   check('--out: rename-fejl fejler', atomicRenameFail.status, (v) => v !== 0);
   check('--out: rename-fejl efterlader gammelt indhold', readFileSync(join(atomicDirTarget, 'old.txt'), 'utf8'), (v) => v === 'old\n');
   check('--out: rename-fejl rydder temp-filen', readdirSync(tmp).filter((n) => n.startsWith('atomic-target-dir.')), (v) => v.length === 0);
@@ -3489,7 +3520,7 @@ try {
   if (process.platform !== 'win32') {
     const atomicLimited = join(atomicDir, 'limited.md');
     writeFileSync(atomicLimited, 'old digest\n');
-    const limited = spawnSync('/bin/sh', ['-c', 'trap "" XFSZ; ulimit -f 1; exec "$0" "$@"', process.execPath, cliPath, tmp, '--format', 'md', '--out', atomicLimited], { encoding: 'utf8' });
+    const limited = spawnSync('/bin/sh', ['-c', 'trap "" XFSZ; ulimit -f 1; exec "$0" "$@"', process.execPath, cliPath, tmp, '--format', 'md', '--out', atomicLimited], { encoding: 'utf8', cwd: isolatedCwd });
     check('--out: skrivefejl fejler', limited.status, (v) => v !== 0);
     check('--out: skrivefejl bevarer den gamle fil', readFileSync(atomicLimited, 'utf8'), (v) => v === 'old digest\n');
     check('--out: skrivefejl rydder temp-filen', readdirSync(atomicDir).filter((n) => n.startsWith('limited.md.')), (v) => v.length === 0);
@@ -3497,12 +3528,48 @@ try {
     console.log('skip: EFBIG/ulimit findes ikke på Windows');
   }
 
+  // Standardkonteksten er stadig testbar: den følger barnets cwd. En test
+  // der vil prøve den peger cwd på en temp-mappe med sin egen context.md.
+  const contextCwd = join(tmp, 'context-cwd');
+  mkdirSync(contextCwd, { recursive: true });
+  const contextMarker = 'SMOKE-CONTEXT-MARKER-42';
+  writeFileSync(join(contextCwd, 'context.md'), `# Testkontekst\n${contextMarker}\n`);
+  const defaultCtxRun = runCli([tmp], { cwd: contextCwd, encoding: 'utf8' });
+  check('standardkontekst læses fra barnets cwd', defaultCtxRun, (v) => v.includes('## CONTEXT') && v.includes(contextMarker));
+  // Den bærende egenskab er barnets EFFEKTIVE cwd, ikke stien til en
+  // konstant. Proben starter et barn med netop standardindstillingerne og
+  // ingen anden cwd og sammenligner barnets process.cwd() med repo-roden.
+  // Flyttes standard-cwd'en til repo-roden, fejler proben. Sammenligningen
+  // bruger realpath, så den er drev- og volumen-agnostisk og ikke afhænger
+  // af, om temp-mappen ligger inde i repoet uden at være repo-roden.
+  const cwdProbe = spawnSync(process.execPath, ['-e', 'process.stdout.write(process.cwd())'], {
+    ...defaultRunOptions(),
+    encoding: 'utf8',
+  });
+  const probeCwd = cwdProbe.stdout;
+  let probeReal = null;
+  try {
+    probeReal = realpathSync(probeCwd);
+  } catch {}
+  const repoReal = realpathSync(repoRoot);
+  check('standard-cwd: proben kører', cwdProbe.status, (v) => v === 0);
+  check('standard-cwd er en absolut sti til en eksisterende mappe', probeCwd, (v) =>
+    isAbsolute(v) && existsSync(v) && statSync(v).isDirectory(),
+  );
+  check('standard-cwd er ikke repo-roden', probeReal, (v) => v !== null && v !== repoReal);
+  // Røgtest på udviklermaskiner: repo-roddens context.md må ikke lække ind.
+  // Den er IKKE bærende alene, fordi context.md er gitignored og derfor
+  // ikke findes i et friskt checkout, hvor den passer uanset cwd. Proben
+  // ovenfor bærer egenskaben på CI.
+  const noDefaultCtxRun = runCli([tmp], { encoding: 'utf8' });
+  check('standardkontekst lækker ikke ind fra repoet', noDefaultCtxRun, (v) => !v.includes('## CONTEXT') && !v.includes(contextMarker));
+
   // Punkt 2: en manglende --context advarer på stderr uden at ændre digesten.
   const contextMissing = join(tmp, 'missing-context.md');
   const contextEmpty = join(tmp, 'empty-context.md');
   writeFileSync(contextEmpty, '');
-  const missingCtxRun = spawnSync(process.execPath, [cliPath, tmp, '--context', contextMissing], { encoding: 'utf8' });
-  const emptyCtxRun = spawnSync(process.execPath, [cliPath, tmp, '--context', contextEmpty], { encoding: 'utf8' });
+  const missingCtxRun = spawnSync(process.execPath, [cliPath, tmp, '--context', contextMissing], { encoding: 'utf8', cwd: isolatedCwd });
+  const emptyCtxRun = spawnSync(process.execPath, [cliPath, tmp, '--context', contextEmpty], { encoding: 'utf8', cwd: isolatedCwd });
   const stripGenerated = (s) => s.replace(/^generated=.*$/m, 'generated=<same>');
   check('--context: manglende fil advarer på stderr med stien', missingCtxRun.stderr, (v) => v.includes(contextMissing));
   check('--context: manglende fil ændrer ikke digesten', stripGenerated(missingCtxRun.stdout), (v) => v === stripGenerated(emptyCtxRun.stdout));
