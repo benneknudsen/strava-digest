@@ -68,7 +68,7 @@ function parseFit(buf: Buffer): Track {
     if (err) failure = err;
     else data = parsed;
   });
-  if (failure || !data) throw failure ?? new Error('FIT-parse fejlede');
+  if (failure || !data) throw failure ?? new Error('FIT parse failed');
   return trackFromFit(data);
 }
 

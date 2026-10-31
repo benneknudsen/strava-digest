@@ -1134,8 +1134,8 @@ try {
 
   const looseDirMd = execFileSync('node', ['src/cli.ts', looseDir, '--last', '3', '--format', 'md'], { encoding: 'utf8' });
   check('loose mappe: header siger mappe og metadata fra filerne', looseDirMd, (v) => v.includes('(folder, 4 activity files)') && v.includes('metadata read from the files'));
-  check('loose mappe: noten siger at navnet kommer fra filnavnet', looseDirMd, (v) => v.includes('eksportens navn ikke') && v.includes('kommer fra filnavnet'));
-  check('loose mappe: fil uden brugbar tid sprunget over med note', looseDirMd, (v) => v.includes('sprunget over') && v.includes('UdenTid.gpx'));
+  check('loose mappe: noten siger at navnet kommer fra filnavnet', looseDirMd, (v) => v.includes('Without activities.csv') && v.includes('uses the file names'));
+  check('loose mappe: fil uden brugbar tid sprunget over med note', looseDirMd, (v) => v.includes('file skipped') && v.includes('UdenTid.gpx'));
   check('loose mappe: tre løb i digesten', looseDirMd, (v) => v.includes('3 runs in digest'));
 
   const looseZones = execFileSync('node', ['src/cli.ts', looseDir, '--last', '1', '--max-hr', '240'], { encoding: 'utf8' });

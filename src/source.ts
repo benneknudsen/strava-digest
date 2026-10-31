@@ -71,7 +71,7 @@ function openZip(path: string): Promise<ExportSource> {
             read: (name) => readZipEntry(zf, entries, name),
             size: async (name) => {
               const entry = entries.get(name);
-              if (!entry) throw new Error(`findes ikke i arkivet: ${name}`);
+              if (!entry) throw new Error(`not in the archive: ${name}`);
               return entry.uncompressedSize;
             },
             warnings: () => skippedEntryWarnings(skipped),
@@ -125,7 +125,7 @@ async function readZipEntry(
   name: string,
 ): Promise<Buffer> {
   const entry = entries.get(name);
-  if (!entry) throw new Error(`findes ikke i arkivet: ${name}`);
+  if (!entry) throw new Error(`not in the archive: ${name}`);
   const limit = limitForFileName(name);
   if (entry.uncompressedSize > limit) throw tooLargeError(name, entry.uncompressedSize);
   return new Promise((resolve, reject) => {

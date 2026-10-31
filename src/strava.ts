@@ -151,8 +151,8 @@ export function parseActivities(table: CsvTable, map: ColumnMap): ParsedActiviti
     activities.push({
       // Removing `ActivityRow.id` also drops the `id` key from `--json` output; deliberate per issue #20.
       date,
-      name: raw(row, map, 'name') || '(uden navn)',
-      type: type || '(ukendt)',
+      name: raw(row, map, 'name') || '(no name)',
+      type: type || '(unknown)',
       distanceM: distanceMeters(row, map),
       movingSec: durationSec(row, map, 'movingSec'),
       elapsedSec: durationSec(row, map, 'elapsedSec'),

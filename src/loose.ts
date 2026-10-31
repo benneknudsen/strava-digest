@@ -74,7 +74,7 @@ export function rowFromTrack(
   return {
     date: first.t,
     name: filename.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || filename,
-    type: track.sport === 'unknown' ? 'ukendt' : track.sport,
+    type: track.sport === 'unknown' ? 'unknown' : track.sport,
     distanceM,
     movingSec: analysis?.movingSec ?? null,
     elapsedSec: Math.max(0, (last.t.getTime() - first.t.getTime()) / 1000),

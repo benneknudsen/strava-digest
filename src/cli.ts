@@ -376,7 +376,7 @@ interface LooseEntry {
 }
 
 const LOOSE_HOST_NOTE =
-  'Uden activities.csv findes eksportens navn ikke — navnet i digesten kommer fra filnavnet. Relative Effort, udstyr og kalorier er udeladt.';
+  'Without activities.csv the export gives no activity names, so the digest uses the file names. Relative Effort, gear and calories are omitted.';
 
 /**
  * Filer der ikke kan blive et pas: for få punkter, et første tidsstempel der er
@@ -446,7 +446,7 @@ async function runLoose(
   const chosen = pool.slice(0, limit);
   if (!chosen.length) {
     const skipNote = skipped.length
-      ? ` Sprunget over: ${skipped.map((e) => basename(e.file)).join(', ')}.`
+      ? ` Skipped: ${skipped.map((e) => basename(e.file)).join(', ')}.`
       : '';
     console.error(`No runs found in the activity files (try --all).${skipNote}`);
     return 1;
@@ -455,7 +455,7 @@ async function runLoose(
   const notes = [LOOSE_HOST_NOTE];
   if (skipped.length) {
     notes.push(
-      `${skipped.length} fil${skipped.length === 1 ? '' : 'er'} sprunget over: ${skipped
+      `${skipped.length} file${skipped.length === 1 ? '' : 's'} skipped: ${skipped
         .map((e) => `${basename(e.file)} (${e.reason})`)
         .join(', ')}.`,
     );
