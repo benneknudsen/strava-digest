@@ -160,6 +160,33 @@ try {
   check('antal løb', activities.filter((a) => a.isRun).length, (v) => v === 3);
   check('newest first', activities[0].name, (v) => v === 'Long run');
 
+  /* ---- issue #39: parseCsv edge cases, tested directly ---- */
+  const lfTable = parseCsv('a,b\n1,2\n3,4\n');
+  check('csv: BOM foran header fjernes', parseCsv('\uFEFFa,b\n1,2\n').headers, (v) =>
+    JSON.stringify(v) === JSON.stringify(['a', 'b']),
+  );
+  check('csv: CRLF giver samme tabel som LF', parseCsv('a,b\r\n1,2\r\n3,4\r\n'), (v) =>
+    JSON.stringify(v) === JSON.stringify(lfTable),
+  );
+  check('csv: escaped citationstegn giver ét tegn', parseCsv('a,b\n"x""y",z\n').rows[0], (v) =>
+    v?.length === 2 && v[0] === 'x"y' && v[1] === 'z',
+  );
+  check('csv: indlejret linjeskift bliver i samme felt', parseCsv('a,b\n"line1\nline2",z\n').rows[0], (v) =>
+    v?.length === 2 && v[0] === 'line1\nline2' && v[1] === 'z',
+  );
+  check('csv: sidste linje uden newline kommer med', parseCsv('a,b\n1,2').rows, (v) =>
+    JSON.stringify(v) === JSON.stringify([['1', '2']]),
+  );
+  // Kommaet i den quoted header må ikke vinde over det semikolon, der står
+  // uden for quotes: ellers læses hele filen med den forkerte separator.
+  check(
+    'csv: semikolon-sniff ignorerer komma i quoted felt',
+    parseCsv('"name, full";city\n"Smith, John";Aarhus\n'),
+    (v) =>
+      JSON.stringify(v.headers) === JSON.stringify(['name, full', 'city']) &&
+      JSON.stringify(v.rows) === JSON.stringify([['Smith, John', 'Aarhus']]),
+  );
+
   // GPX-vejen: lang tur, 10 km, stigende puls, faldende pace
   const gpxEntry = resolveActivityEntry(source, found.root, activities[0].filename);
   const track = parseActivityBuffer(gpxEntry, await source.read(gpxEntry));
@@ -2008,9 +2035,11 @@ try {
   }
 
   // Kolonnenavne kommer oversatte. Et tysk eksport skal finde de samme felter.
+  const germanCsvHeader =
+    'Aktivitäts-ID;Aktivitätsdatum;Aktivitätsname;Aktivitätstyp;Gesamtzeit;Bewegungszeit;Distanz;Durchschnittliche Herzfrequenz;Maximale Herzfrequenz;Höhenanstieg;Kalorien;Aktivitätsausrüstung;Dateiname';
   const germanHeaders = parseCsv(
     [
-      'Aktivitäts-ID;Aktivitätsdatum;Aktivitätsname;Aktivitätstyp;Gesamtzeit;Bewegungszeit;Distanz;Durchschnittliche Herzfrequenz;Maximale Herzfrequenz;Höhenanstieg;Kalorien;Aktivitätsausrüstung;Dateiname',
+      germanCsvHeader,
       '1001;12. Okt. 2026, 06:32;Morgenlauf;Lauf;3360;3360;10,0;156;174;120;600;Nike Vomero;Run-1001.gpx',
     ].join('\n'),
   );
@@ -2043,6 +2072,42 @@ try {
     numberRow[germanElevation] = input;
     check(`talformat ${input}`, num(numberRow, germanMap, 'elevationGain'), (v) => v === expected);
   }
+
+  // issue #39 (B): the number rule must hold through mapColumns +
+  // parseActivities, not only through num(). A German export writes 10,5 km
+  // and 1.234,5 m, and both fields must reach the activity model unchanged.
+  const germanExport = parseCsv(
+    [
+      germanCsvHeader,
+      '1001;12. Okt. 2026, 06:32;Morgenlauf;Lauf;3360;3360;10,5;156;174;1.234,5;600;Nike Vomero;Run-1001.gpx',
+    ].join('\n'),
+  );
+  const germanExportMap = mapColumns(germanExport);
+  const germanExportRow = parseActivities(germanExport, germanExportMap).activities[0];
+  check('tysk eksport: distance 10,5 bliver 10500 m', germanExportRow?.distanceM, (v) => v === 10_500);
+  check('tysk eksport: elevation 1.234,5 bliver 1234,5 m', germanExportRow?.elevationGain, (v) =>
+    v === 1234.5,
+  );
+  check('tysk eksport: Lauf tæller som løb', germanExportRow?.isRun, (v) => v === true);
+
+  // Dutch export through the same path. The date is numeric and day-first,
+  // and the number fields use comma decimal with dot thousands.
+  const dutchExport = parseCsv(
+    [
+      'Afstand;Toename in hoogte;Activity Date;Filename;Moving Time;Activity Type;Activity Name',
+      '"10,5";"1.234,5";12-10-2026 06:32;Run-2001.gpx;3600;Hardlopen;Ochtendloop',
+    ].join('\n'),
+  );
+  const dutchExportMap = mapColumns(dutchExport);
+  const dutchExportRow = parseActivities(dutchExport, dutchExportMap).activities[0];
+  check('hollandsk eksport: distance 10,5 bliver 10500 m', dutchExportRow?.distanceM, (v) => v === 10_500);
+  check('hollandsk eksport: elevation 1.234,5 bliver 1234,5 m', dutchExportRow?.elevationGain, (v) =>
+    v === 1234.5,
+  );
+  check('hollandsk eksport: Hardlopen tæller som løb', dutchExportRow?.isRun, (v) => v === true);
+  check('hollandsk eksport: numerisk dato 12-10-2026 læses dag først', dutchExportRow?.date.toISOString(), (v) =>
+    v === '2026-10-12T06:32:00.000Z',
+  );
 
   // issue #21 punkt 5: dansk tekstvarighed må ikke falde igennem til num(),
   // som skraber cifrene og gør "1 t 30 min" til 130 sekunder.
@@ -3032,6 +3097,65 @@ try {
       return null;
     }
   };
+
+  /* ---- issue #39 (C): the zip layer through openSource, not only through the CLI ---- */
+  const zippedCsv = readFileSync(join(tmp, 'activities.csv'));
+  const zipLayerPath = writeZip(
+    'zip-layer',
+    buildZip([
+      { name: 'activities.csv', data: zippedCsv },
+      { name: 'activities/Run-1001.gpx', data: readFileSync(join(tmp, 'activities', 'Run-1001.gpx')) },
+      { name: 'activities/Run-1002.tcx', data: readFileSync(join(tmp, 'activities', 'Run-1002.tcx')) },
+      { name: 'activities/Run-1003.gpx', data: readFileSync(join(tmp, 'activities', 'Run-1003.gpx')) },
+    ]),
+  );
+  const zipLayerSource = await openSource(zipLayerPath);
+  try {
+    const zipEntries = zipLayerSource.list();
+    check('zip: list() har activities.csv og aktivitetsfiler med /-stier', zipEntries, (v) =>
+      v.includes('activities.csv') &&
+      v.includes('activities/Run-1001.gpx') &&
+      v.includes('activities/Run-1002.tcx') &&
+      v.includes('activities/Run-1003.gpx') &&
+      v.every((entry) => !entry.includes('\\')),
+    );
+    check('zip: read() giver de zippede bytes', await zipLayerSource.read('activities.csv'), (v) =>
+      Buffer.isBuffer(v) && v.equals(zippedCsv),
+    );
+    check('zip: size() matcher byte-længden', await zipLayerSource.size('activities.csv'), (v) =>
+      v === zippedCsv.length,
+    );
+  } finally {
+    await zipLayerSource.close();
+  }
+
+  // The same four files on disk give the same digest as the zip. `source=` and
+  // `generated=` are the only machine-specific lines (path and clock), so they
+  // are removed before the byte comparison; everything else must match exactly.
+  const extractedDir = scratch('zip-vs-dir');
+  mkdirSync(join(extractedDir, 'activities'), { recursive: true });
+  copyFileSync(join(tmp, 'activities.csv'), join(extractedDir, 'activities.csv'));
+  for (const name of ['Run-1001.gpx', 'Run-1002.tcx', 'Run-1003.gpx']) {
+    copyFileSync(join(tmp, 'activities', name), join(extractedDir, 'activities', name));
+  }
+  const digestWithoutSourceLines = (target) => {
+    try {
+      return runCli([target], { encoding: 'utf8' })
+        .split('\n')
+        .filter((line) => !/^(?:generated|source)=/.test(line))
+        .join('\n');
+    } catch (err) {
+      return `CLI failed: ${String(err.stderr ?? err.message)}`;
+    }
+  };
+  const zipDigest = digestWithoutSourceLines(zipLayerPath);
+  const dirDigest = digestWithoutSourceLines(extractedDir);
+  const isRealDigest = (v) =>
+    !v.startsWith('CLI failed:') && v.includes('# STRAVA DIGEST v2') && v.includes('runs=');
+  check('zip vs mappe: zip-output er en ægte digest', zipDigest, isRealDigest);
+  check('zip vs mappe: mappe-output er en ægte digest', dirDigest, isRealDigest);
+  check('zip vs mappe: digesten er identisk', zipDigest, (v) => v === dirDigest);
+
   // A single path argument must still work unchanged after flag parsing was
   // made strict.
   const pathOnlyRun = runZipCli([writeZip('zip-path-only', fixtureZip)]);
