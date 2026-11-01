@@ -1,8 +1,8 @@
 import type { Stats } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { safeHomedir } from './install.ts';
 import { collectActivityFiles, isActivityFile } from './loose.ts';
 import { findActivitiesCsv, openSource } from './source.ts';
 
@@ -140,12 +140,26 @@ async function classify(
  * Ellers kan de to komme i utakt, og en agent ville få et andet
  * sæt kilder end brugeren.
  */
-export function searchDirs(): string[] {
-  const home = homedir();
-  const dirs = [process.cwd(), join(home, 'Downloads'), join(home, 'Desktop')];
+export function searchDirs(home: string = safeHomedir()): string[] {
+  const dirs = [process.cwd()];
+  // En tom eller relativ hjemmemappe må ikke blive til relative søgemapper:
+  // så ville vi lede i forhold til cwd i stedet for i brugerens hjemmemappe.
+  if (isAbsolute(home)) dirs.push(join(home, 'Downloads'), join(home, 'Desktop'));
   const profile = process.env.USERPROFILE;
   if (profile) dirs.push(join(profile, 'Downloads'), join(profile, 'Desktop'));
   return dirs;
+}
+
+/**
+ * Kort besked når hjemmemappen ikke kan bruges, ellers `null`.
+ *
+ * På Windows kaster `os.homedir()` når miljøvariablen ikke peger på en
+ * eksisterende mappe. Uden denne besked ville brugeren se libuvs fejl eller
+ * en tom liste uden at vide hvorfor `~/Downloads` og `~/Desktop` manglede.
+ */
+export function homeWarning(home: string = safeHomedir()): string | null {
+  if (isAbsolute(home)) return null;
+  return 'cannot read the home directory, so ~/Downloads and ~/Desktop were not searched';
 }
 
 /**
@@ -154,6 +168,8 @@ export function searchDirs(): string[] {
  * giver en dansk fejl.
  */
 export async function pickSource(): Promise<string | null> {
+  const warning = homeWarning();
+  if (warning) console.error(warning);
   const candidates = await discoverSources(searchDirs());
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {

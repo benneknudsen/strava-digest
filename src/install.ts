@@ -37,7 +37,7 @@ export function isPathInside(root: string, target: string): boolean {
  * mappe. Uden denne fælde ville brugeren se libuvs fejl i stedet for vores
  * egen besked, og en tom eller ugyldig hjemmemappe ville aldrig nå guarden.
  */
-function safeHomedir(): string {
+export function safeHomedir(): string {
   try {
     return homedir();
   } catch {

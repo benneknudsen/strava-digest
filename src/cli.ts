@@ -7,7 +7,7 @@ import { isPlausibleDate, mapColumns } from './columns.ts';
 import { parseCsv } from './csv.ts';
 import { renderMarkdown, type DigestInput, type DigestedRun } from './digest.ts';
 import { renderAgent } from './agent.ts';
-import { discoverSources, pickSource, searchDirs, type Candidate } from './interactive.ts';
+import { discoverSources, homeWarning, pickSource, searchDirs, type Candidate } from './interactive.ts';
 import { installSkill, renderInstall } from './install.ts';
 import { activityFormatOf, limitForFileName, tooLargeError } from './limits.ts';
 import { collectActivityFiles, firstValidPoint, isActivityFile, MIN_TRACK_POINTS, rowFromTrack } from './loose.ts';
@@ -165,6 +165,10 @@ function missingActivitiesCsvMessage(source: ExportSource): string {
  * Exit-kode 0 når der blev fundet noget, 1 når der ikke gjorde.
  */
 async function findSources(): Promise<number> {
+  // Beskeden hører på stderr: stdout er det maskinlæsbare svar, én sti pr.
+  // linje, og må ikke blandes med mennesketekst.
+  const warning = homeWarning();
+  if (warning) console.error(warning);
   const candidates = await discoverSources(searchDirs());
   // En agent vil se den RIGTIGE eksport først: en zip eller en mappe med
   // activities.csv, og helst en hvor filerne ligger lige i mappen. MAPPER
