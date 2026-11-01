@@ -3389,44 +3389,79 @@ try {
   check('GPX: kun data-lat/data-lon giver ingen punkter', safeTrack('DataOnly.gpx', Buffer.from(dataOnlyXml))?.points.length ?? null, (v) => v === 0);
 
   // issue #40: en trunkeret fil må ikke få den lazy regex til at skanne resten
-  // af filen fra hver åben tag. 40.000 åbne <trkpt> tog sekunder på O(n²);
-  // lineær scanning giver 0 punkter med det samme. Tidsgrænsen er løs nok
-  // til CI og umulig at overholde for den gamle kode.
-  const truncatedGpxPoint = (i) =>
-    `<trkpt lat="55.${String(i).padStart(5, '0')}" lon="12.${String(i).padStart(5, '0')}"><ele>20</ele><time>2026-10-11T07:00:00Z</time>`;
-  const truncatedGpx = `<?xml version="1.0"?>\n<gpx version="1.1"><trk><type>running</type><trkseg>\n${Array.from({ length: 40000 }, (_, i) => truncatedGpxPoint(i)).join('\n')}\n</trkseg></trk></gpx>\n`;
-  const gpxStart = Date.now();
-  const truncatedGpxTrack = (() => {
+  // af filen fra hver åben tag. Guarden er ikke et vægur: fixturen køres i en
+  // barneproces med en grov hænggrænse, og en timeout betyder at parseren hang,
+  // ikke at den var langsom. 350.000 åbne punkter gør forskellen mellem lineær
+  // og kvadratisk adfærd ubetinget. Fixture-strengen bygges i en løkke i proben,
+  // så den ikke duplikeres i testprocessen, og payloaden er trimmet for at holde
+  // barnets hukommelse nede.
+  const truncatedProbeScript = join(tmp, 'truncated-parse-probe.mjs');
+  writeFileSync(
+    truncatedProbeScript,
+    `import { parseActivityBuffer } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'src', 'activity.ts')).href)};
+const count = 350000;
+const [kind] = process.argv.slice(2);
+if (kind !== 'gpx' && kind !== 'tcx') {
+  process.stderr.write('unknown kind: ' + String(kind));
+  process.exit(2);
+}
+const nl = String.fromCharCode(10);
+const pad = (i) => String(i).padStart(5, '0');
+let points = '';
+for (let i = 0; i < count; i++) {
+  points += kind === 'gpx'
+    ? '<trkpt lat="55.' + pad(i) + '" lon="12.' + pad(i) + '"><time>2026-10-11T07:00:00Z</time>' + nl
+    : '<Trackpoint><Time>2026-10-11T07:00:00Z</Time><Position><LatitudeDegrees>55.' + pad(i) + '</LatitudeDegrees><LongitudeDegrees>12.' + pad(i) + '</LongitudeDegrees></Position>' + nl;
+}
+const name = kind === 'gpx' ? 'Truncated.gpx' : 'Truncated.tcx';
+const xml = kind === 'gpx'
+  ? '<?xml version="1.0"?>' + nl + '<gpx version="1.1"><trk><type>running</type><trkseg>' + nl + points + '</trkseg></trk></gpx>' + nl
+  : '<?xml version="1.0"?>' + nl + '<TrainingCenterDatabase><Activities><Activity Sport="Running"><Lap><Track>' + nl + points + '</Track></Lap></Activity></Activities></TrainingCenterDatabase>' + nl;
+const started = process.hrtime.bigint();
+let result;
+try {
+  const track = parseActivityBuffer(name, Buffer.from(xml));
+  result = { points: track.points.length, error: null };
+} catch (err) {
+  result = { points: null, error: String(err) };
+}
+result.ms = Math.round(Number(process.hrtime.bigint() - started) / 1e6);
+result.peakRssMb = Math.round(process.resourceUsage().maxRSS / 1024);
+process.stdout.write(JSON.stringify(result));
+`,
+  );
+  // Ved 350.000 punkter tog den gamle O(n²)-kode ~313 s (GPX) og ~990 s (TCX)
+  // ifølge QA's måling ved 120.000 punkter. Den lineære parser gør det i
+  // <150 ms. 30 s er derfor ≥10× under den gamle kode og hundreder af gange
+  // over den lineære. Grænsen fanger et hæng, måler ikke fart.
+  const truncatedTimeoutMs = 30000;
+  const checkTruncated = (label, kind) => {
+    const run = spawnSync(process.execPath, [truncatedProbeScript, kind], {
+      encoding: 'utf8',
+      timeout: truncatedTimeoutMs,
+    });
+    let parsed = null;
     try {
-      return parseActivityBuffer('Truncated.gpx', Buffer.from(truncatedGpx));
-    } catch (err) {
-      return { error: String(err) };
+      parsed = JSON.parse(run.stdout);
+    } catch {}
+    if (run.status === 0 && parsed) {
+      console.log(`      ${label}: ${parsed.ms} ms, peak RSS ${parsed.peakRssMb} MB`);
+      check(label, parsed, (v) => v.points === 0 && v.error === null);
+      return;
     }
-  })();
-  const gpxElapsed = Date.now() - gpxStart;
-  check('GPX: trunkeret fil giver 0 punkter uden crash', {
-    points: truncatedGpxTrack.points?.length ?? null,
-    error: truncatedGpxTrack.error ?? null,
-    fast: gpxElapsed < 1500,
-  }, (v) => v.points === 0 && v.error === null && v.fast);
-
-  const truncatedTcxPoint = (i) =>
-    `<Trackpoint><Time>2026-10-11T07:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z</Time><Position><LatitudeDegrees>55.${String(i).padStart(5, '0')}</LatitudeDegrees><LongitudeDegrees>12.${String(i).padStart(5, '0')}</LongitudeDegrees></Position><DistanceMeters>${i * 2.5}</DistanceMeters>`;
-  const truncatedTcx = `<?xml version="1.0"?>\n<TrainingCenterDatabase><Activities><Activity Sport="Running"><Lap><Track>\n${Array.from({ length: 40000 }, (_, i) => truncatedTcxPoint(i)).join('\n')}\n</Track></Lap></Activity></Activities></TrainingCenterDatabase>\n`;
-  const tcxStart = Date.now();
-  const truncatedTcxTrack = (() => {
-    try {
-      return parseActivityBuffer('Truncated.tcx', Buffer.from(truncatedTcx));
-    } catch (err) {
-      return { error: String(err) };
-    }
-  })();
-  const tcxElapsed = Date.now() - tcxStart;
-  check('TCX: trunkeret fil giver 0 punkter uden crash', {
-    points: truncatedTcxTrack.points?.length ?? null,
-    error: truncatedTcxTrack.error ?? null,
-    fast: tcxElapsed < 2000,
-  }, (v) => v.points === 0 && v.error === null && v.fast);
+    failures++;
+    const why = run.signal
+      ? `parseren hang (dræbt efter ${truncatedTimeoutMs} ms med ${run.signal})`
+      : 'barneprocessen fejlede';
+    console.log(`FAIL  ${label} — ${why}; status: ${JSON.stringify(run.status)}; signal: ${JSON.stringify(run.signal)}; stderr: ${JSON.stringify(run.stderr ?? '')}`);
+  };
+  checkTruncated('GPX: trunkeret fil giver 0 punkter uden crash', 'gpx');
+  checkTruncated('TCX: trunkeret fil giver 0 punkter uden crash', 'tcx');
+  const badKind = spawnSync(process.execPath, [truncatedProbeScript, 'bogus'], {
+    encoding: 'utf8',
+    timeout: truncatedTimeoutMs,
+  });
+  check('probe: ukendt kind fejler tydeligt', badKind.status, (v) => v === 2);
 
   // Regression for issue #40: den lineære scanning skal give præcis samme
   // punkter og felter som den gamle regex på velformet input, inklusive
