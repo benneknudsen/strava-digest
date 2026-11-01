@@ -15,7 +15,7 @@ import { utf8Bytes } from './bytes.mjs';
 import { renderMarkdown, fmtDelta, fmtDuration, fmtPace } from '../src/digest.ts';
 import { renderAgent } from '../src/agent.ts';
 import { resolveTargets } from '../src/install.ts';
-import { cleanPath, discoverSources } from '../src/interactive.ts';
+import { cleanPath, discoverSources, homeWarning, searchDirs } from '../src/interactive.ts';
 import { collectActivityFiles, isActivityFile, rowFromTrack } from '../src/loose.ts';
 import {
   ACTIVITY_FILE_LIMIT_BYTES,
@@ -4046,6 +4046,81 @@ try {
   check('fmtDelta: 0 vises +0:00/km', deltaText(0), (v) => v === '+0:00/km');
   check('fmtDelta: -119,5 sek vises −2:00/km', deltaText(-119.5), (v) => v === '−2:00/km');
   check('fmtDelta: null vises –', fmtDelta(null), (v) => v === '–');
+
+  // --find og den interaktive vælger må ikke bygge søgemapper på en
+  // hjemmemappe, der ikke kan læses. På Windows kaster os.homedir(), når
+  // miljøvariablen ikke peger på en eksisterende mappe; på Unix gør den
+  // ikke, så den injicerede vej dækker begge platforme.
+  // USERPROFILE fjernes omkring kaldet: på Windows er den sat i forvejen, og
+  // så ville listen indeholde hjemmemappe-baserede Downloads/Desktop uden at
+  // det siger noget om den tomme hjemmemappe, testen undersøger.
+  const savedUserProfile = process.env.USERPROFILE;
+  let emptyHomeDirs = [];
+  try {
+    delete process.env.USERPROFILE;
+    emptyHomeDirs = searchDirs('');
+  } finally {
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  }
+  check('searchDirs: tom hjemmemappe giver ingen hjemmemappe-baserede Downloads/Desktop', emptyHomeDirs, (v) =>
+    v.includes(process.cwd()) && v.every((d) => !d.endsWith(`${sep}Downloads`) && !d.endsWith(`${sep}Desktop`)));
+  check('searchDirs: alle søgemapper er absolutte', emptyHomeDirs, (v) => v.every(isAbsolute));
+
+  const exportHome = join(tmp, 'eksport-home');
+  const exportHomeDirs = searchDirs(exportHome);
+  check('searchDirs: absolut hjemmemappe giver Downloads og Desktop', exportHomeDirs, (v) =>
+    v.includes(join(exportHome, 'Downloads')) && v.includes(join(exportHome, 'Desktop')));
+
+  const emptyHomeWarning = homeWarning('');
+  const relativeHomeWarning = homeWarning('relativ/sti');
+  check('homeWarning: tom hjemmemappe giver engelsk advarsel', emptyHomeWarning, (v) =>
+    typeof v === 'string' && v.includes('home directory') && !v.includes('uv_os_homedir'));
+  check('homeWarning: relativ hjemmemappe giver engelsk advarsel', relativeHomeWarning, (v) =>
+    typeof v === 'string' && v.includes('home directory') && !v.includes('uv_os_homedir'));
+  check('homeWarning: absolut hjemmemappe giver ingen advarsel', homeWarning(exportHome), (v) => v === null);
+
+  // CLI-niveau: en ubetjenbar hjemmemappe må ikke give en rå libuv-fejl på
+  // stdout, og de øvrige søgemapper skal stadig virke. Fixturen ligger i
+  // cwd, så der ER en kandidat at printe uanset hjemmemappen.
+  const missingHome = join(tmp, 'home-that-does-not-exist');
+  const missingHomeCwd = join(tmp, 'missing-home-cwd');
+  mkdirSync(missingHomeCwd, { recursive: true });
+  writeFileSync(join(missingHomeCwd, 'activities.csv'), '');
+  const missingHomeEnv = { ...process.env, HOME: missingHome, USERPROFILE: missingHome };
+  const missingFind = spawnSync(process.execPath, [cliPath, '--find'], {
+    encoding: 'utf8',
+    cwd: missingHomeCwd,
+    env: missingHomeEnv,
+  });
+  const missingFindLines = missingFind.stdout.trim().split('\n').filter(Boolean);
+  check('--find: ubetjenbar hjemmemappe crasher ikke', missingFind.status, (v) => v === 0);
+  check('--find: stdout er kun eksisterende stier', missingFindLines, (v) =>
+    v.length > 0 && v.every((p) => existsSync(p)));
+  check('--find: advarsel aldrig på stdout', missingFind.stdout, (v) =>
+    !v.includes('home directory') && !v.includes('uv_os_homedir'));
+  check('--find: ingen rå libuv-fejl på stderr', missingFind.stderr, (v) => !v.includes('uv_os_homedir'));
+
+  const homeWarningScript = join(tmp, 'home-warning.mjs');
+  writeFileSync(
+    homeWarningScript,
+    `import { homeWarning } from ${JSON.stringify(pathToFileURL(join(repoRoot, 'src', 'interactive.ts')).href)};\n` +
+      `console.log(JSON.stringify({ actual: homeWarning(), injected: homeWarning('') }));\n`,
+  );
+  const homeWarningRun = spawnSync(process.execPath, [homeWarningScript], {
+    encoding: 'utf8',
+    env: missingHomeEnv,
+  });
+  const homeWarningProbe = JSON.parse(homeWarningRun.stdout || 'null');
+  // Den injicerede vej virker uanset OS: homedir() kaster kun på Windows, så
+  // uden denne assertion ville stderr-kravet være udækket på Unix.
+  check('homeWarning: injiceret tom hjemmemappe giver advarsel på alle platforme', homeWarningProbe?.injected ?? null, (v) =>
+    typeof v === 'string' && v.includes('home directory') && !v.includes('uv_os_homedir'));
+  if (homeWarningProbe?.actual) {
+    check('--find: advarsel står på stderr', missingFind.stderr, (v) => v.includes(homeWarningProbe.actual));
+  } else {
+    console.log('skip: homedir() kaster ikke på denne platform; den injicerede vej er dækket ovenfor');
+  }
 
   // Punkt 5: launcheren skal oversætte et dræbende signal til 128 + nummer
   // for alle signaler Node kender, ikke kun en håndskrevet håndfuld.
