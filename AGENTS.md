@@ -66,7 +66,8 @@ Both must be green. CI also runs on Linux, macOS and Windows with Node 22 and
 - `src/interactive.ts` — the interactive picker and `--find`
 - `src/install.ts` — `--install-skill`
 - `src/analysis.ts` — splits, drift, zones, load
-- `src/columns.ts` — the column alias table (one place per language)
+- `src/columns/aliases.ts` — the column alias table (one place per language)
+- `src/columns.ts` — the facade that re-exports the public parsing API from `src/columns/`
 - `src/loose.ts` — loose activity files
 - `src/strava.ts` — CSV reading and column mapping
 - `src/csv.ts` — CSV parsing
