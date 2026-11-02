@@ -138,7 +138,7 @@ observation, not the user's tested max. When the numbers matter, ask.
   "Löp"), or it may be other activity types — `--all` helps. The default
   agent format reports how many populated export columns it could not place;
   run with `--format md` to see up to 12 of their header names, so a new alias
-  is one line in `src/columns.ts`.
+  is one line in `src/columns/aliases.ts`.
 - A run line containing `err=` means that file could not be read. The rest of
   the digest is still valid.
 - `z=-` means the run has no heart-rate data to zone. The zone boundaries

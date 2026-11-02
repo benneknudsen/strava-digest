@@ -314,7 +314,7 @@ async function runBulk(
   const sourceNotes = source.warnings();
   const hostNotes = [
     ...(map.unmatched.length
-      ? ['Add aliases in src/columns.ts if a field is missing from the digest.']
+      ? ['Add aliases in src/columns/aliases.ts if a field is missing from the digest.']
       : []),
     ...sourceNotes,
     ...coverage,
