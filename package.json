@@ -3,7 +3,7 @@
   "version": "1.0.6",
   "description": "Turns a Strava bulk export into one compact training digest an agent can read: splits, HR drift, pace consistency, zones, training load, trends.",
   "scripts": {
-    "test": "node scripts/smoke-test.mjs",
+    "test": "node --test \"src/**/*.test.ts\" && node scripts/smoke-test.mjs",
     "start": "node src/cli.ts",
     "build": "tsc -p tsconfig.build.json",
     "prepare": "npm run build",
@@ -44,6 +44,7 @@
     "bin/",
     "dist/",
     "src/",
+    "!src/**/*.test.ts",
     "skills/",
     "context.example.md",
     "README.md",

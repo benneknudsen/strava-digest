@@ -8,5 +8,6 @@
     "sourceMap": false,
     "removeComments": false
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }
